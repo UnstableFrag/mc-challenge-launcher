@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "challengehud",
+  "version": "1.0.0",
+  "name": "Challenge HUD",
+  "description": "In-game HUD for item speedrun challenge",
+  "authors": ["mcchallenge"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/challengehud/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["com.github.mcchallenge.challengehud.ChallengeHud"]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.14.0",
+    "minecraft": "~1.21.1",
+    "architectury": ">=9.1.13"
+  }
+}

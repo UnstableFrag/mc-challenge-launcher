@@ -27,7 +27,7 @@ jobs:
       
       - name: Build challenge-mod
         working-directory: ./challenge-mod
-        run: ./gradlew jar --no-daemon
+        run: gradle jar --no-daemon
       
       - name: Upload mod jar
         uses: actions/upload-artifact@v4

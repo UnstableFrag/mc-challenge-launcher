@@ -1,7 +1,7 @@
 // src/instance.rs
 use anyhow::Result;
-use reqwest::Client;
 use serde_json::Value;
+use std::io::Read;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use zip::ZipArchive;

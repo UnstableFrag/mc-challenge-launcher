@@ -23,9 +23,9 @@ mod embed;
 use modrinth::ModrinthApi;
 use instance::InstanceManager;
 use challenge::{ChallengeConfig, ItemPool};
-use reqwest::Client;
 use monitor::Monitor;
 use cleanup::clean_instance;
+use dirs;
 
 #[derive(Parser)]
 #[command(name = "mc-challenge-launcher")]
@@ -36,7 +36,8 @@ struct Args {
     modpack: Option<String>,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
     let mut terminal = init_tui()?;
     let mut app = App::new(args.modpack).await?;
@@ -123,7 +124,7 @@ impl App {
         if self.modpack_slug.is_some() {
             self.state = AppState::Injecting;
             self.push_log("📥 Downloading & extracting .mrpack...");
-            let instance = self.instance_mgr.create_instance_from_modpack(&pack.slug, &self.api.client).await?;
+            let instance = self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client()).await?;
             self.push_log(&format!("📂 Instance: {}", instance.path.display()));
             self.push_log("💉 Injecting challenge mod...");
             self.inject_challenge(&instance).await?;

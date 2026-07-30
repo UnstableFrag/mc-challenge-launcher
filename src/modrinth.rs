@@ -42,7 +42,7 @@ pub struct ModpackFile {
     pub file_type: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct ModpackDependency {
     version_id: Option<String>,
     project_id: Option<String>,
@@ -102,8 +102,8 @@ impl ModrinthApi {
             .ok_or_else(|| anyhow::anyhow!("No .mrpack file in version"))?;
 
         let mut resp = self.client.get(&file.url).send().await?;
-        let mut out = std::fs::File::create(dest)?;
-        std::io::copy(&mut resp, &mut out)?;
+        let bytes = resp.bytes().await?;
+        std::fs::write(dest, bytes)?;
         Ok(())
     }
 

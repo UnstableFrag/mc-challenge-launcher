@@ -61,9 +61,10 @@ jobs:
       - name: Rename mod jar
         shell: pwsh
         run: |
+          Remove-Item assets/challenge-mod.jar -Force -ErrorAction SilentlyContinue
           $jar = Get-ChildItem assets/*.jar | Select-Object -First 1
           if (-not $jar) { throw "No mod jar found in assets/" }
-          Rename-Item -Path $jar.FullName -NewName "challenge-mod.jar"
+          Move-Item -Path $jar.FullName -Destination "assets/challenge-mod.jar" -Force
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

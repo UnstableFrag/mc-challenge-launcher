@@ -23,3 +23,4 @@ open = "5.0"
 tempfile = "3.5"
 include_dir = "0.7"
 textwrap = "0.16"
+clap = { version = "4.4", features = ["derive"] }

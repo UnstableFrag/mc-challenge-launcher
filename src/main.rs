@@ -1,6 +1,7 @@
 // src/main.rs
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use clap::Parser;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
@@ -25,10 +26,19 @@ use challenge::{ChallengeConfig, ItemPool};
 use monitor::Monitor;
 use cleanup::clean_instance;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+#[derive(Parser)]
+#[command(name = "mc-challenge-launcher")]
+#[command(about = "Random modpack challenge launcher")]
+struct Args {
+    /// Launch a specific modpack by slug instead of rolling randomly
+    #[arg(long)]
+    modpack: Option<String>,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
     let mut terminal = init_tui()?;
-    let mut app = App::new().await?;
+    let mut app = App::new(args.modpack).await?;
     loop {
         terminal.draw(|f| app.ui(f))?;
         if event::poll(Duration::from_millis(50))? {
@@ -55,12 +65,13 @@ struct App {
     result: Option<monitor::RunResult>,
     log_lines: Vec<String>,
     auto_cleanup_timer: Option<Instant>,
+    modpack_slug: Option<String>,
 }
 
 enum AppState { Idle, Searching, OpeningModrinth, Injecting, Running, Completed, AutoCleanup, Cleaning }
 
 impl App {
-    async fn new() -> Result<Self> {
+    async fn new(modpack_slug: Option<String>) -> Result<Self> {
         Ok(Self {
             state: AppState::Idle,
             api: ModrinthApi::new(),
@@ -72,6 +83,7 @@ impl App {
             result: None,
             log_lines: vec!["🎲 Modpack Challenge Launcher ready".into()],
             auto_cleanup_timer: None,
+            modpack_slug,
         })
     }
 
@@ -95,11 +107,17 @@ impl App {
     }
 
     async fn start_roll(&mut self) -> Result<()> {
-        self.state = AppState::Searching;
-        self.push_log("🔍 Searching random modpack...");
-        let pack = self.api.random_modpack().await?;
+        let pack = if let Some(slug) = &self.modpack_slug {
+            self.push_log(&format!("🎯 Using specified modpack: {}", slug));
+            self.api.modpack_by_slug(slug).await?
+        } else {
+            self.state = AppState::Searching;
+            self.push_log("🔍 Searching random modpack...");
+            let pack = self.api.random_modpack().await?;
+            self.push_log(&format!("🎯 Found: {}", pack.title));
+            pack
+        };
         self.current_pack = Some(pack.clone());
-        self.push_log(&format!("🎯 Found: {}", pack.title));
         self.state = AppState::OpeningModrinth;
         self.push_log("📦 Opening in Modrinth App...");
         open::that(format!("modrinth://modpack/{}", pack.slug))?;

@@ -1,7 +1,13 @@
 // src/instance.rs
 use anyhow::Result;
+use reqwest::Client;
+use serde_json::Value;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
+use zip::ZipArchive;
+use std::io::Cursor;
+use std::fs;
+use std::process::Command;
 
 pub struct Instance {
     pub path: PathBuf,
@@ -11,6 +17,7 @@ pub struct Instance {
 
 pub struct InstanceManager {
     base_dir: PathBuf,
+    work_dir: PathBuf,
 }
 
 fn normalize(s: &str) -> String {
@@ -36,7 +43,9 @@ impl InstanceManager {
         } else {
             dirs::home_dir().unwrap().join(".local/share/ModrinthApp/profiles")
         };
-        Ok(Self { base_dir: base })
+        let work = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
+        fs::create_dir_all(&work)?;
+        Ok(Self { base_dir: base, work_dir: work })
     }
 
     pub async fn wait_for_instance(&self, slug: &str, title: &str) -> Result<Instance> {
@@ -57,5 +66,82 @@ impl InstanceManager {
             sleep(Duration::from_secs(1)).await;
         }
         anyhow::bail!("Instance not found for slug={} title={}", slug, title)
+    }
+
+    pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client) -> Result<Instance> {
+        let version_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
+        let versions = client
+            .get(&version_url)
+            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .send().await?
+            .json::<serde_json::Value>().await?;
+
+        let mrpack_url = versions.as_array()
+            .and_then(|v| v.iter().find(|ver| {
+                ver["files"].as_array().map(|f| {
+                    f.iter().any(|file| file["filename"].as_str().map(|n| n.ends_with(".mrpack")).unwrap_or(false))
+                }).unwrap_or(false)
+            }))
+            .and_then(|ver| ver["files"].as_array().and_then(|f| {
+                f.iter().find(|file| file["filename"].as_str().map(|n| n.ends_with(".mrpack")).unwrap_or(false))
+            }))
+            .and_then(|f| f["url"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("No .mrpack file found for {}", slug))?;
+
+        let instance_dir = self.work_dir.join(slug);
+        fs::create_dir_all(&instance_dir)?;
+
+        let mrpack_data = client
+            .get(mrpack_url)
+            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .send().await?
+            .bytes().await?;
+
+        let mut archive = ZipArchive::new(Cursor::new(mrpack_data))?;
+        
+        let mut index_json = String::new();
+        archive.by_name("index.json")?.read_to_string(&mut index_json)?;
+        let index: serde_json::Value = serde_json::from_str(&index_json)?;
+
+        let files = index["files"].as_object().ok_or_else(|| anyhow::anyhow!("No files in index"))?;
+        
+        let mods_dir = instance_dir.join("mods");
+        let config_dir = instance_dir.join("config");
+        fs::create_dir_all(&mods_dir)?;
+        fs::create_dir_all(&config_dir)?;
+
+        for (path, file_info) in files {
+            let dest = if path.starts_with("mods/") {
+                mods_dir.join(path.strip_prefix("mods/").unwrap())
+            } else if path.starts_with("config/") || path.starts_with("overrides/") {
+                let stripped = path.strip_prefix("overrides/").unwrap_or(&path);
+                config_dir.join(stripped)
+            } else {
+                instance_dir.join(path)
+            };
+
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent)?;
+            }
+
+            let mut file = archive.by_name(path)?;
+            let mut dest_file = fs::File::create(&dest)?;
+            std::io::copy(&mut file, &mut dest_file)?;
+        }
+
+        Ok(Instance {
+            mods_dir,
+            config_dir,
+            path: instance_dir,
+        })
+    }
+
+    pub fn launch_minecraft(&self, instance: &Instance, java_path: Option<&str>) -> Result<std::process::Child> {
+        let java = java_path.unwrap_or("java");
+        let mut cmd = Command::new(java);
+        cmd.arg("-jar")
+            .arg(instance.path.join("fabric-launcher.jar").to_string_lossy().to_string())
+            .current_dir(&instance.path);
+        Ok(cmd.spawn()?)
     }
 }

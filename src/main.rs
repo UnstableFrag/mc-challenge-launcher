@@ -23,6 +23,7 @@ mod embed;
 use modrinth::ModrinthApi;
 use instance::InstanceManager;
 use challenge::{ChallengeConfig, ItemPool};
+use reqwest::Client;
 use monitor::Monitor;
 use cleanup::clean_instance;
 
@@ -118,19 +119,33 @@ impl App {
             pack
         };
         self.current_pack = Some(pack.clone());
-        self.state = AppState::OpeningModrinth;
-        self.push_log("📦 Opening in Modrinth App...");
-        open::that(format!("modrinth://modpack/{}", pack.slug))?;
-        self.state = AppState::Injecting;
-        self.push_log("⏳ Waiting for instance...");
-        let instance = self.instance_mgr.wait_for_instance(&pack.slug, &pack.title).await?;
-        self.push_log(&format!("📂 Instance: {}", instance.path.display()));
-        self.push_log("💉 Injecting challenge mod...");
-        self.inject_challenge(&instance).await?;
-        self.state = AppState::Running;
-        self.timer_start = Some(Instant::now());
-        self.monitor.start(instance.path.clone());
-        self.push_log("🚀 Challenge active! Get the item!");
+
+        if self.modpack_slug.is_some() {
+            self.state = AppState::Injecting;
+            self.push_log("📥 Downloading & extracting .mrpack...");
+            let instance = self.instance_mgr.create_instance_from_modpack(&pack.slug, &self.api.client).await?;
+            self.push_log(&format!("📂 Instance: {}", instance.path.display()));
+            self.push_log("💉 Injecting challenge mod...");
+            self.inject_challenge(&instance).await?;
+            self.state = AppState::Running;
+            self.timer_start = Some(Instant::now());
+            self.monitor.start(instance.path.clone());
+            self.push_log("🚀 Challenge active! Get the item!");
+        } else {
+            self.state = AppState::OpeningModrinth;
+            self.push_log("📦 Opening in Modrinth App...");
+            open::that(format!("modrinth://modpack/{}", pack.slug))?;
+            self.state = AppState::Injecting;
+            self.push_log("⏳ Waiting for instance...");
+            let instance = self.instance_mgr.wait_for_instance(&pack.slug, &pack.title).await?;
+            self.push_log(&format!("📂 Instance: {}", instance.path.display()));
+            self.push_log("💉 Injecting challenge mod...");
+            self.inject_challenge(&instance).await?;
+            self.state = AppState::Running;
+            self.timer_start = Some(Instant::now());
+            self.monitor.start(instance.path.clone());
+            self.push_log("🚀 Challenge active! Get the item!");
+        }
         Ok(())
     }
 
@@ -156,7 +171,13 @@ impl App {
 
     async fn cleanup_and_reset(&mut self) -> Result<()> {
         self.state = AppState::Cleaning;
-        if let Some(pack) = &self.current_pack { clean_instance(&pack.slug, &pack.title).await?; }
+        if let Some(pack) = &self.current_pack { 
+            clean_instance(&pack.slug, &pack.title).await?;
+            // Also clean direct instance in work_dir
+            let work_dir = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
+            let direct = work_dir.join(&pack.slug);
+            if direct.exists() { std::fs::remove_dir_all(&direct).ok(); }
+        }
         self.push_log("🧹 Cleaned up");
         self.reset();
         Ok(())

@@ -3,6 +3,7 @@ use anyhow::Result;
 use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::Path;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Modpack {
@@ -18,8 +19,36 @@ pub struct Modpack {
     pub description: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct SearchResponse { hits: Vec<Modpack> }
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ModpackVersion {
+    pub id: String,
+    pub version_number: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub files: Vec<ModpackFile>,
+    pub dependencies: Vec<ModpackDependency>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct ModpackFile {
+    pub hashes: std::collections::HashMap<String, String>,
+    pub url: String,
+    pub filename: String,
+    pub primary: bool,
+    pub size: u64,
+    pub file_type: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ModpackDependency {
+    version_id: Option<String>,
+    project_id: Option<String>,
+    file_name: Option<String>,
+    dependency_type: String,
+}
 
 pub struct ModrinthApi { client: Client }
 
@@ -39,6 +68,10 @@ const FALLBACK_MODPACKS: &[&str] = &[
 impl ModrinthApi {
     pub fn new() -> Self { Self { client: Client::new() } }
 
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     pub async fn random_modpack(&self) -> Result<Modpack> {
         self.random_modpack_from_index().await
     }
@@ -50,6 +83,28 @@ impl ModrinthApi {
             .send().await?
             .json::<Modpack>().await?;
         Ok(resp)
+    }
+
+    pub async fn get_latest_version(&self, slug: &str) -> Result<ModpackVersion> {
+        let resp = self.client
+            .get(format!("https://api.modrinth.com/v2/project/{}/version", slug))
+            .query(&[("loaders", "[\"fabric\",\"forge\",\"neoforge\",\"quilt\"]")])
+            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .send().await?
+            .json::<Vec<ModpackVersion>>().await?;
+        resp.into_iter().next().ok_or_else(|| anyhow::anyhow!("No compatible version found"))
+    }
+
+    pub async fn download_mrpack(&self, version: &ModpackVersion, dest: &Path) -> Result<()> {
+        let file = version.files.iter()
+            .find(|f| f.primary && f.filename.ends_with(".mrpack"))
+            .or_else(|| version.files.iter().find(|f| f.filename.ends_with(".mrpack")))
+            .ok_or_else(|| anyhow::anyhow!("No .mrpack file in version"))?;
+
+        let mut resp = self.client.get(&file.url).send().await?;
+        let mut out = std::fs::File::create(dest)?;
+        std::io::copy(&mut resp, &mut out)?;
+        Ok(())
     }
 
     async fn random_modpack_from_index(&self) -> Result<Modpack> {

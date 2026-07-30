@@ -218,12 +218,14 @@ impl App {
     async fn cleanup_and_reset(&mut self) -> Result<()> {
         self.state = AppState::Cleaning;
         self.push_log("🧹 Cleaning up...");
-        if let Some(pack) = &self.current_pack { 
-            if let Err(e) = clean_instance(&pack.slug, &pack.title).await {
+        let cleanup_slug = self.current_pack.as_ref().map(|p| p.slug.clone());
+        let cleanup_title = self.current_pack.as_ref().map(|p| p.title.clone());
+        if let Some(ref slug) = cleanup_slug {
+            if let Err(e) = clean_instance(slug, cleanup_title.as_deref().unwrap_or(slug)).await {
                 self.push_log(&format!("⚠️ Cleanup issue: {}", e));
             }
             let work_dir = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
-            let direct = work_dir.join(&pack.slug);
+            let direct = work_dir.join(slug);
             if direct.exists() { std::fs::remove_dir_all(&direct).ok(); }
         }
         self.push_log("✅ Cleaned up");
@@ -254,8 +256,10 @@ impl App {
             if let Some(started) = self.auto_cleanup_timer {
                 if started.elapsed().as_secs() >= 10 {
                     self.state = AppState::Cleaning;
-                    if let Some(pack) = &self.current_pack {
-                        if let Err(e) = clean_instance(&pack.slug, &pack.title).await {
+                    let slug = self.current_pack.as_ref().map(|p| p.slug.clone());
+                    let title = self.current_pack.as_ref().map(|p| p.title.clone());
+                    if let Some(ref s) = slug {
+                        if let Err(e) = clean_instance(s, title.as_deref().unwrap_or(s)).await {
                             self.push_log(&format!("⚠️ Cleanup issue: {}", e));
                         }
                     }

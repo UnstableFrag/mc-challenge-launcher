@@ -188,7 +188,7 @@ impl App {
                 Constraint::Length(8),
                 Constraint::Length(3),
             ])
-            .split(f.area());
+            .split(f.size());
 
         let title = match self.state {
             AppState::Idle => "🎲 IDLE — Press [R] to roll",
@@ -245,29 +245,28 @@ impl App {
             main_chunks[0],
         );
 
-        let right = if let AppState::Running = self.state {
-            let elapsed = self.timer_start.unwrap().elapsed().as_secs_f32();
-            ratatui::widgets::Widget::render(
-                Gauge::default()
+                match self.state {
+            AppState::Running => {
+                let elapsed = self.timer_start.unwrap().elapsed().as_secs_f64();
+                let gauge = Gauge::default()
                     .block(Block::default().borders(Borders::ALL).title("⏱️  Timer"))
                     .gauge_style(Style::default().fg(Color::Cyan))
                     .ratio((elapsed % 60.0) / 60.0)
-                    .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60)),
-                main_chunks[1], f.buf_mut());
-            return; // gauge отрендерен вручную, чтобы не бороться с типами в if/else
-        } else if let AppState::Completed = self.state {
-            Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again")
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Result"))
-        } else {
-            Paragraph::new("Waiting for challenge...")
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Status"))
-        };
-        // если мы не в Running — рендерим Paragraph; если в Running — уже вышли выше
-        let _ = right; // (ниже общий рендер для не-Running веток)
-        if !matches!(self.state, AppState::Running) {
-            f.render_widget(right, main_chunks[1]);
+                    .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60));
+                f.render_widget(gauge, main_chunks[1]);
+            }
+            AppState::Completed => {
+                let p = Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again")
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("Result"));
+                f.render_widget(p, main_chunks[1]);
+            }
+            _ => {
+                let p = Paragraph::new("Waiting for challenge...")
+                    .alignment(Alignment::Center)
+                    .block(Block::default().borders(Borders::ALL).title("Status"));
+                f.render_widget(p, main_chunks[1]);
+            }
         }
 
         let log_text = Text::from(self.log_lines.join("\n"));

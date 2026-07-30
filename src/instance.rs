@@ -1,7 +1,7 @@
 // src/instance.rs
 use anyhow::Result;
 use dirs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 
 pub struct Instance {

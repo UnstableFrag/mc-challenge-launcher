@@ -27,7 +27,6 @@ impl ChallengeConfig {
     }
 }
 
-#[derive(Default)]
 pub struct ItemPool {
     pub items: Vec<String>,
 }

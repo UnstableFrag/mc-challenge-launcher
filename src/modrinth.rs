@@ -1,7 +1,9 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
+
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone)]
 pub struct Modpack {
@@ -46,7 +48,7 @@ impl ModrinthApi {
     pub async fn modpack_by_slug(&self, slug: &str) -> Result<Modpack> {
         let resp = self.client
             .get(format!("https://api.modrinth.com/v2/project/{}", slug))
-            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .header("User-Agent", UA)
             .send().await?
             .json::<serde_json::Value>().await?;
 
@@ -74,12 +76,20 @@ impl ModrinthApi {
 
             let resp = self.client
                 .get(&url)
-                .header("User-Agent", "mc-challenge-launcher/0.2 (contact: github.com/UnstableFrag)")
-                .send().await?
-                .json::<ModpackIndexResponse>().await?;
+                .header("User-Agent", UA)
+                .send().await?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Modpack Index returned {}: {}", status, body.chars().take(200).collect::<String>());
+            }
+
+            let body = resp.text().await?;
+            let index_resp: ModpackIndexResponse = serde_json::from_str(&body)?;
 
             let mut rng = rand::thread_rng();
-            let packs: Vec<_> = resp.data.into_iter()
+            let packs: Vec<_> = index_resp.data.into_iter()
                 .filter(|p| p.modrinth_info.is_some())
                 .collect();
 

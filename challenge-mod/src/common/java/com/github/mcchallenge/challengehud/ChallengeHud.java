@@ -7,7 +7,9 @@ import dev.architectury.platform.Platform;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.registry.Registries;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
@@ -20,6 +22,9 @@ import java.io.FileWriter;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 import com.google.gson.*;
 
 public class ChallengeHud implements ClientModInitializer {
@@ -33,9 +38,11 @@ public class ChallengeHud implements ClientModInitializer {
     private static Instant startTime;
     private static String playerName = "";
     private static ChallengeType challengeType = ChallengeType.ITEM;
+    private static final long CHALLENGE_TICKS = 6000; // 5 min (20 ticks/sec * 300 sec)
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static MinecraftClient client = MinecraftClient.getInstance();
+    private static final Random RNG = new Random();
 
     enum ChallengeType { ITEM, MOB_KILL, EXPLORE }
 
@@ -45,6 +52,31 @@ public class ChallengeHud implements ClientModInitializer {
         HudRenderCallback.EVENT.register(this::render);
         loadConfig();
         LOGGER.info("Challenge HUD loaded");
+    }
+
+    private void pickRandomTarget() {
+        List<Item> candidates = new ArrayList<>();
+        for (Item item : Registries.ITEM) {
+            if (item == Items.AIR) continue;
+            Identifier id = Registries.ITEM.getId(item);
+            String path = id.getPath();
+            if (path.contains("spawn_egg")) continue;
+            if (path.contains("command_block")) continue;
+            if (path.contains("barrier")) continue;
+            if (path.contains("debug")) continue;
+            if (path.contains("light") && path.equals("light")) continue;
+            if (path.startsWith("knowledge_book")) continue;
+            candidates.add(item);
+        }
+
+        if (candidates.isEmpty()) {
+            targetStack = new ItemStack(Items.DIAMOND);
+            LOGGER.warn("No items found, defaulting to diamond");
+        } else {
+            Item picked = candidates.get(RNG.nextInt(candidates.size()));
+            targetStack = new ItemStack(picked);
+            LOGGER.info("Random target: {} ({})", Registries.ITEM.getId(picked), picked.getName().getString());
+        }
     }
 
     private void tick(MinecraftClient client) {
@@ -61,11 +93,8 @@ public class ChallengeHud implements ClientModInitializer {
                     complete(client);
                 }
             }
-            case MOB_KILL -> {
-                // handled via tag matching in config
-            }
-            case EXPLORE -> {
-            }
+            case MOB_KILL -> {}
+            case EXPLORE -> {}
         }
     }
 
@@ -118,13 +147,8 @@ public class ChallengeHud implements ClientModInitializer {
                 (elapsed.getSeconds() % 60) / 60f, 0x89B4FA);
         }
 
-        String hint = switch (challengeType) {
-            case ITEM -> "Get this item to win!";
-            case MOB_KILL -> "Kill this mob to win!";
-            case EXPLORE -> "Explore to win!";
-        };
-        ctx.drawTextWithShadow(client.textRenderer, hint,
-            panelX + panelW / 2 - client.textRenderer.getWidth(hint) / 2,
+        ctx.drawTextWithShadow(client.textRenderer, "Get this item to win!",
+            panelX + panelW / 2 - client.textRenderer.getWidth("Get this item to win!") / 2,
             panelY + panelH - 25, 0xA6ADC8);
     }
 
@@ -166,39 +190,12 @@ public class ChallengeHud implements ClientModInitializer {
             obj.addProperty("player", playerName);
             obj.addProperty("time_ticks", elapsed.toMillis() / 50);
             obj.addProperty("time_ms", elapsed.toMillis());
-            obj.addProperty("type", challengeType.name());
 
             try (FileWriter fw = new FileWriter(resultFile)) {
                 GSON.toJson(obj, fw);
             }
         } catch (Exception e) {
             LOGGER.error("Failed to write result", e);
-        }
-    }
-
-    public static void setTarget(ItemStack stack, long deadline) {
-        targetStack = stack.copy();
-        deadlineTicks = deadline;
-        active = true;
-        completed = false;
-        startTime = Instant.now();
-        challengeType = ChallengeType.ITEM;
-    }
-
-    public static void setTarget(String targetId, long deadline) {
-        deadlineTicks = deadline;
-        active = true;
-        completed = false;
-        startTime = Instant.now();
-        challengeType = ChallengeType.ITEM;
-
-        Identifier id = new Identifier(targetId);
-        var item = Registries.ITEM.get(id);
-        targetStack = item != null ? new ItemStack(item) : ItemStack.EMPTY;
-        if (targetStack.isEmpty()) {
-            LOGGER.warn("Item {} not found in registry, HUD will show empty", targetId);
-        } else {
-            LOGGER.info("Challenge target set to {}", targetStack.getName().getString());
         }
     }
 
@@ -209,18 +206,36 @@ public class ChallengeHud implements ClientModInitializer {
                 String json = Files.readString(configFile.toPath());
                 JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
                 String target = obj.get("target").getAsString();
-                long deadline = obj.has("deadline") ? obj.get("deadline").getAsLong() : 0;
-                String typeStr = obj.has("type") ? obj.get("type").getAsString() : "ITEM";
-                try {
-                    challengeType = ChallengeType.valueOf(typeStr.toUpperCase());
-                } catch (IllegalArgumentException e) {
-                    LOGGER.warn("Unknown challenge type '{}', defaulting to ITEM", typeStr);
-                    challengeType = ChallengeType.ITEM;
+                Identifier id = new Identifier(target);
+                var item = Registries.ITEM.get(id);
+                targetStack = item != null && item != Items.AIR ? new ItemStack(item) : ItemStack.EMPTY;
+
+                if (targetStack.isEmpty()) {
+                    pickRandomTarget();
+                } else {
+                    LOGGER.info("Config target: {}", target);
                 }
-                setTarget(target, deadline);
+            } else {
+                pickRandomTarget();
             }
+
+            startTime = Instant.now();
+            if (client.world != null) {
+                deadlineTicks = client.world.getTime() + CHALLENGE_TICKS;
+            } else {
+                deadlineTicks = CHALLENGE_TICKS;
+            }
+            active = true;
+            completed = false;
+            challengeType = ChallengeType.ITEM;
         } catch (Exception e) {
-            LOGGER.warn("No challenge config found, waiting for launcher");
+            LOGGER.warn("No challenge config, using random target");
+            pickRandomTarget();
+            startTime = Instant.now();
+            deadlineTicks = CHALLENGE_TICKS;
+            active = true;
+            completed = false;
+            challengeType = ChallengeType.ITEM;
         }
     }
 

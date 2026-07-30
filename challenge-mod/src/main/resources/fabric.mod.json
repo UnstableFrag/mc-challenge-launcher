@@ -3,7 +3,7 @@
   "id": "challengehud",
   "version": "1.0.0",
   "name": "Challenge HUD",
-  "description": "In-game HUD for item speedrun challenge",
+  "description": "Universal in-game HUD challenge mod — works with any modpack on Fabric, Forge, NeoForge, and Quilt via Architectury",
   "authors": ["mcchallenge"],
   "contact": {},
   "license": "MIT",

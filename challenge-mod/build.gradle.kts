@@ -29,7 +29,9 @@ tasks.jar {
             "Mod-Id" to "challengehud",
             "Mod-Name" to "Challenge HUD",
             "Mod-Version" to version.toString(),
-            "Fabric-Mod-Loader" to ">=0.14.0"
+            "Fabric-Mod-Loader" to ">=0.14.0",
+            "Archived-Classifier" to "universal",
+            "Automatic-Module-Name" to "challengehud"
         )
     }
 }

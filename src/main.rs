@@ -54,9 +54,10 @@ struct App {
     timer_start: Option<Instant>,
     result: Option<monitor::RunResult>,
     log_lines: Vec<String>,
+    auto_cleanup_timer: Option<Instant>,
 }
 
-enum AppState { Idle, Searching, OpeningModrinth, Injecting, Running, Completed, Cleaning }
+enum AppState { Idle, Searching, OpeningModrinth, Injecting, Running, Completed, AutoCleanup, Cleaning }
 
 impl App {
     async fn new() -> Result<Self> {
@@ -70,6 +71,7 @@ impl App {
             timer_start: None,
             result: None,
             log_lines: vec!["🎲 Modpack Challenge Launcher ready".into()],
+            auto_cleanup_timer: None,
         })
     }
 
@@ -85,6 +87,8 @@ impl App {
             (KeyCode::Char('r'), AppState::Idle) => self.start_roll().await?,
             (KeyCode::Char('c'), AppState::Running) => self.cancel_run().await?,
             (KeyCode::Char('x'), AppState::Completed) => self.cleanup_and_reset().await?,
+            (KeyCode::Char('x'), AppState::AutoCleanup) => self.cleanup_and_reset().await?,
+            (KeyCode::Char('x'), AppState::Cleaning) => self.cleanup_and_reset().await?,
             _ => {}
         }
         Ok(false)
@@ -147,14 +151,26 @@ impl App {
         self.timer_start = None;
         self.result = None;
         self.monitor = Monitor::new();
+        self.auto_cleanup_timer = None;
     }
 
     async fn tick(&mut self) -> Result<()> {
         if let AppState::Running = self.state {
             if let Some(res) = self.monitor.check_result()? {
                 self.result = Some(res);
-                self.state = AppState::Completed;
-                self.push_log("🏁 RUN COMPLETE!");
+                self.state = AppState::AutoCleanup;
+                self.push_log("🏁 RUN COMPLETE! Minecraft will close automatically...");
+                self.auto_cleanup_timer = Some(std::time::Instant::now());
+            }
+        }
+        if let AppState::AutoCleanup = self.state {
+            if let Some(started) = self.auto_cleanup_timer {
+                if started.elapsed().as_secs() >= 10 {
+                    self.state = AppState::Cleaning;
+                    if let Some(pack) = &self.current_pack { clean_instance(&pack.slug, &pack.title).await?; }
+                    self.push_log("🧹 Cleaned up");
+                    self.reset();
+                }
             }
         }
         Ok(())
@@ -171,7 +187,7 @@ impl App {
             AppState::OpeningModrinth => "📦 OPENING IN MODRINTH APP...",
             AppState::Injecting => "💉 INJECTING CHALLENGE...",
             AppState::Running => "🏃 RUNNING — Get the item!",
-            AppState::Completed => "🏁 COMPLETED — Press [X] to cleanup",
+            AppState::AutoCleanup => "🧹 AUTO-CLEANUP — Minecraft closing...",
             AppState::Cleaning => "🧹 CLEANING...",
         };
         f.render_widget(
@@ -227,6 +243,11 @@ impl App {
                     .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60));
                 f.render_widget(gauge, main_chunks[1]);
             }
+            AppState::AutoCleanup => {
+                let remaining = 10 - self.auto_cleanup_timer.unwrap().elapsed().as_secs();
+                f.render_widget(Paragraph::new(format!("✅ Challenge complete! Closing Minecraft...\nCleanup in {}s", remaining))
+                    .alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result")), main_chunks[1]);
+            }
             AppState::Completed => {
                 f.render_widget(Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again")
                     .alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result")), main_chunks[1]);
@@ -245,7 +266,7 @@ impl App {
         let help = match self.state {
             AppState::Idle => "[R] Roll  [Q] Quit",
             AppState::Running => "[C] Cancel  [Q] Quit",
-            AppState::Completed => "[X] Cleanup & Reset  [Q] Quit",
+            AppState::AutoCleanup | AppState::Cleaning | AppState::Completed => "[X] Cleanup & Reset  [Q] Quit",
             _ => "[Q] Quit",
         };
         f.render_widget(Paragraph::new(help).alignment(Alignment::Center).block(Block::default().borders(Borders::ALL)), chunks[3]);

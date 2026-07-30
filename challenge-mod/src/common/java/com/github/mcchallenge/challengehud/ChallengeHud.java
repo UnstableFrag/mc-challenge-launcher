@@ -269,7 +269,10 @@ public class ChallengeHud implements ClientModInitializer {
         @Override
         public void tick() {
             ticks++;
-            if (ticks > 100) close();
+            if (ticks > 100) {
+                close();
+                client.execute(() -> client.stop());
+            }
         }
     }
 
@@ -298,7 +301,10 @@ public class ChallengeHud implements ClientModInitializer {
         @Override
         public void tick() {
             ticks++;
-            if (ticks > 100) close();
+            if (ticks > 100) {
+                close();
+                client.execute(() -> client.stop());
+            }
         }
     }
 }

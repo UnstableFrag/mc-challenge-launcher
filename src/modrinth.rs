@@ -1,59 +1,21 @@
-// src/modrinth.rs
 use anyhow::Result;
 use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
-use std::path::Path;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Modpack {
     pub slug: String,
     pub title: String,
-    #[serde(default)]
     pub author: String,
-    #[serde(default)]
     pub versions: Vec<String>,
-    #[serde(default)]
     pub categories: Vec<String>,
-    #[serde(default)]
-    pub downloads: u64,
-    #[serde(default, alias = "followers")]
-    pub follows: u64,
     pub description: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
-struct SearchResponse { hits: Vec<Modpack> }
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct ModpackVersion {
-    pub id: String,
-    pub version_number: String,
-    pub game_versions: Vec<String>,
-    pub loaders: Vec<String>,
-    pub files: Vec<ModpackFile>,
-    pub dependencies: Vec<ModpackDependency>,
+pub struct ModrinthApi {
+    client: Client,
 }
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct ModpackFile {
-    pub hashes: std::collections::HashMap<String, String>,
-    pub url: String,
-    pub filename: String,
-    pub primary: bool,
-    pub size: u64,
-    pub file_type: String,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct ModpackDependency {
-    version_id: Option<String>,
-    project_id: Option<String>,
-    file_name: Option<String>,
-    dependency_type: String,
-}
-
-pub struct ModrinthApi { client: Client }
 
 const FALLBACK_MODPACKS: &[&str] = &[
     "create",
@@ -69,14 +31,16 @@ const FALLBACK_MODPACKS: &[&str] = &[
 ];
 
 impl ModrinthApi {
-    pub fn new() -> Self { Self { client: Client::new() } }
+    pub fn new() -> Self {
+        Self { client: Client::new() }
+    }
 
     pub fn client(&self) -> &Client {
         &self.client
     }
 
     pub async fn random_modpack(&self) -> Result<Modpack> {
-        self.random_modpack_from_index().await
+        self.random_from_index().await
     }
 
     pub async fn modpack_by_slug(&self, slug: &str) -> Result<Modpack> {
@@ -84,58 +48,84 @@ impl ModrinthApi {
             .get(format!("https://api.modrinth.com/v2/project/{}", slug))
             .header("User-Agent", "mc-challenge-launcher/0.2")
             .send().await?
-            .json::<Modpack>().await?;
-        Ok(resp)
+            .json::<serde_json::Value>().await?;
+
+        Ok(Modpack {
+            slug: resp["slug"].as_str().unwrap_or(slug).to_string(),
+            title: resp["title"].as_str().unwrap_or(slug).to_string(),
+            author: String::new(),
+            versions: resp["game_versions"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+            categories: resp["categories"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+            description: resp["description"].as_str().map(String::from),
+        })
     }
 
-    pub async fn get_latest_version(&self, slug: &str) -> Result<ModpackVersion> {
-        let resp = self.client
-            .get(format!("https://api.modrinth.com/v2/project/{}/version", slug))
-            .query(&[("loaders", "[\"fabric\",\"forge\",\"neoforge\",\"quilt\"]")])
-            .header("User-Agent", "mc-challenge-launcher/0.2")
-            .send().await?
-            .json::<Vec<ModpackVersion>>().await?;
-        resp.into_iter().next().ok_or_else(|| anyhow::anyhow!("No compatible version found"))
-    }
+    async fn random_from_index(&self) -> Result<Modpack> {
+        for _ in 0..5 {
+            let page = rand::thread_rng().gen_range(1..=5000);
+            let url = format!(
+                "https://www.modpackindex.com/api/v1/modpacks?limit=100&page={}",
+                page
+            );
 
-    pub async fn download_mrpack(&self, version: &ModpackVersion, dest: &Path) -> Result<()> {
-        let file = version.files.iter()
-            .find(|f| f.primary && f.filename.ends_with(".mrpack"))
-            .or_else(|| version.files.iter().find(|f| f.filename.ends_with(".mrpack")))
-            .ok_or_else(|| anyhow::anyhow!("No .mrpack file in version"))?;
+            let resp = self.client
+                .get(&url)
+                .header("User-Agent", "mc-challenge-launcher/0.2 (contact: github.com/UnstableFrag)")
+                .send().await?
+                .json::<ModpackIndexResponse>().await?;
 
-        let resp = self.client.get(&file.url).send().await?;
-        let bytes = resp.bytes().await?;
-        std::fs::write(dest, bytes)?;
-        Ok(())
-    }
+            let mut rng = rand::thread_rng();
+            let packs: Vec<_> = resp.data.into_iter()
+                .filter(|p| p.modrinth_info.is_some())
+                .collect();
 
-    async fn random_modpack_from_index(&self) -> Result<Modpack> {
-        let page = rand::thread_rng().gen_range(0..50);
-        let offset = page * 100;
+            if !packs.is_empty() {
+                let idx = rng.gen_range(0..packs.len());
+                let pack = &packs[idx];
+                let info = pack.modrinth_info.as_ref().unwrap();
 
-        let resp = self.client
-            .get("https://api.modrinth.com/v2/search")
-            .query(&[
-                ("facets", "[[\"project_type:modpack\"],[\"follows>100\"]]"),
-                ("limit", "1"),
-                ("offset", &offset.to_string()),
-                ("index", "follows"),
-            ])
-            .header("User-Agent", "mc-challenge-launcher/0.2")
-            .send().await?
-            .json::<SearchResponse>().await?;
-
-        if let Some(pack) = resp.hits.into_iter().next() {
-            return Ok(pack);
+                return Ok(Modpack {
+                    slug: if !info.slug.is_empty() { info.slug.clone() } else { pack.slug.clone() },
+                    title: if !info.title.is_empty() { info.title.clone() } else { pack.name.clone() },
+                    author: String::new(),
+                    versions: vec![],
+                    categories: info.categories.clone(),
+                    description: Some(pack.summary.clone()),
+                });
+            }
         }
-
-        self.random_modpack_from_fallback().await
+        self.random_from_fallback().await
     }
 
-    async fn random_modpack_from_fallback(&self) -> Result<Modpack> {
-        let mut rng = rand::thread_rng();
-        let slug = FALLBACK_MODPACKS[rng.gen_range(0..FALLBACK_MODPACKS.len())];
+    async fn random_from_fallback(&self) -> Result<Modpack> {
+        let slug = FALLBACK_MODPACKS[rand::thread_rng().gen_range(0..FALLBACK_MODPACKS.len())];
         self.modpack_by_slug(slug).await
     }
+}
+
+#[derive(Deserialize)]
+struct ModpackIndexResponse {
+    data: Vec<ModpackIndexItem>,
+}
+
+#[derive(Deserialize)]
+struct ModpackIndexItem {
+    name: String,
+    slug: String,
+    summary: String,
+    modrinth_info: Option<ModrinthInfo>,
+}
+
+#[derive(Deserialize)]
+struct ModrinthInfo {
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    categories: Vec<String>,
 }

@@ -135,13 +135,13 @@ impl App {
     async fn start_roll(&mut self) -> Result<()> {
         let slug_clone = self.modpack_slug.clone();
         let pack = if let Some(slug) = &slug_clone {
-            self.push_log(&format!("🎯 Using specified modpack: {}", slug));
+            self.push_log(&format!("Using specified modpack: {}", slug));
             self.api.modpack_by_slug(slug).await?
         } else {
             self.state = AppState::Searching;
             self.push_log("🔍 Searching random modpack...");
             let pack = self.api.random_modpack().await?;
-            self.push_log(&format!("🎯 Found: {}", pack.title));
+            self.push_log(&format!("Found: {}", pack.title));
             pack
         };
         self.current_pack = Some(pack.clone());
@@ -277,14 +277,14 @@ impl App {
         ]).split(f.size());
 
         let title = match self.state {
-            AppState::Idle => "🎲 IDLE — Press [R] to roll",
-            AppState::Searching => "🔍 SEARCHING...",
-            AppState::OpeningModrinth => "📦 OPENING IN MODRINTH APP...",
-            AppState::Injecting => "💉 INJECTING CHALLENGE...",
-            AppState::Running => "🏃 RUNNING — Get the item!",
-            AppState::AutoCleanup => "🧹 AUTO-CLEANUP — Minecraft closing...",
-            AppState::Cleaning => "🧹 CLEANING...",
-            _ => "🎲 IDLE — Press [R] to roll",
+            AppState::Idle => "IDLE — Press [R] to roll",
+            AppState::Searching => "SEARCHING...",
+            AppState::OpeningModrinth => "OPENING IN MODRINTH APP...",
+            AppState::Injecting => "INJECTING CHALLENGE...",
+            AppState::Running => "RUNNING — Get the item!",
+            AppState::AutoCleanup => "AUTO-CLEANUP — Minecraft closing...",
+            AppState::Cleaning => "CLEANING...",
+            _ => "IDLE — Press [R] to roll",
         };
         f.render_widget(
             Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -307,16 +307,16 @@ impl App {
             }
             if let Some(ch) = &self.challenge {
                 lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled("🎯 TARGET: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(&ch.target)]));
+                lines.push(Line::from(vec![Span::styled("TARGET: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)), Span::raw(&ch.target)]));
             }
             if let Some(start) = self.timer_start {
                 let e = start.elapsed();
-                lines.push(Line::from(vec![Span::styled("⏱️  TIME: ", Style::default().fg(Color::Magenta)),
+                lines.push(Line::from(vec![Span::styled("TIME: ", Style::default().fg(Color::Magenta)),
                     Span::raw(format!("{:02}:{:02}.{:02}", e.as_secs()/60, e.as_secs()%60, e.subsec_millis()/10))]));
             }
             if let Some(res) = &self.result {
                 lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled("🏁 DONE! ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Span::raw(&res.player)]));
+                lines.push(Line::from(vec![Span::styled("DONE! ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Span::raw(&res.player)]));
                 lines.push(Line::from(vec![Span::styled("   Item: ", Style::default().fg(Color::Yellow)), Span::raw(&res.item)]));
                 lines.push(Line::from(vec![Span::styled("   Time: ", Style::default().fg(Color::Cyan)), Span::raw(format!("{} ticks", res.time_ticks))]));
             }
@@ -333,7 +333,7 @@ impl App {
             AppState::Running => {
                 let elapsed = self.timer_start.unwrap().elapsed().as_secs_f64();
                 let gauge = Gauge::default()
-                    .block(Block::default().borders(Borders::ALL).title("⏱️  Timer"))
+                    .block(Block::default().borders(Borders::ALL).title("Timer"))
                     .gauge_style(Style::default().fg(Color::Cyan))
                     .ratio((elapsed % 60.0) / 60.0)
                     .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60));
@@ -341,11 +341,11 @@ impl App {
             }
             AppState::AutoCleanup => {
                 let remaining = 10 - self.auto_cleanup_timer.unwrap().elapsed().as_secs();
-                f.render_widget(Paragraph::new(format!("✅ Challenge complete! Closing Minecraft...\nCleanup in {}s", remaining))
+                f.render_widget(Paragraph::new(format!("Challenge complete! Closing Minecraft...\nCleanup in {}s", remaining))
                     .alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result")), main_chunks[1]);
             }
             AppState::Completed => {
-                f.render_widget(Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again")
+                f.render_widget(Paragraph::new("Challenge completed!\nPress [X] to cleanup and roll again")
                     .alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result")), main_chunks[1]);
             }
             _ => {

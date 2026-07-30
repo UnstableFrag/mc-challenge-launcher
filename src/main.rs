@@ -48,14 +48,14 @@ async fn main() -> Result<()> {
                 if key.kind == KeyEventKind::Press {
                     match app.handle_key(key.code).await {
                         Ok(true) => break,
-                        Err(e) => app.push_log(&format!("❌ {}", e)),
+                        Err(e) => app.push_log(&format!("{}", e)),
                         _ => {}
                     }
                 }
             }
         }
         if let Err(e) = app.tick().await {
-            app.push_log(&format!("❌ tick error: {}", e));
+            app.push_log(&format!("tick error: {}", e));
         }
     }
     restore_tui(&mut terminal)?;
@@ -106,7 +106,7 @@ impl App {
             challenge: None,
             timer_start: None,
             result: None,
-            log_lines: vec!["🎲 Modpack Challenge Launcher ready".into()],
+            log_lines: vec!["Modpack Challenge Launcher ready".into()],
             auto_cleanup_timer: None,
             modpack_slug,
         })
@@ -152,45 +152,45 @@ impl App {
             let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client()).await {
                 Ok(inst) => inst,
                 Err(e) => {
-                    self.push_log(&format!("⚠️ Download failed: {}", e));
+                    self.push_log(&format!("Download failed: {}", e));
                     self.reset();
                     return Ok(());
                 }
             };
-            self.push_log(&format!("📂 Instance: {}", instance.path.display()));
-            self.push_log("💉 Injecting challenge mod...");
+            self.push_log(&format!("Instance: {}", instance.path.display()));
+            self.push_log("Injecting challenge mod...");
             self.inject_challenge(&instance).await?;
             self.state = AppState::Running;
             self.timer_start = Some(Instant::now());
             self.monitor.start(instance.path.clone());
-            self.push_log("🚀 Challenge active! Get the item!");
+            self.push_log("Challenge active! Get the item!");
         } else {
             self.state = AppState::OpeningModrinth;
-            self.push_log("📦 Opening in Modrinth App...");
+            self.push_log("Opening in Modrinth App...");
             if let Err(e) = open::that(format!("modrinth://modpack/{}", pack.slug)) {
-                self.push_log(&format!("⚠️ Could not open Modrinth App: {}", e));
-                self.push_log("💡 Use '--modpack <slug>' for direct download mode");
+                self.push_log(&format!("Could not open Modrinth App: {}", e));
+                self.push_log("Use '--modpack <slug>' for direct download mode");
                 self.reset();
                 return Ok(());
             }
             self.state = AppState::Injecting;
-            self.push_log("⏳ Waiting for instance (up to 2 min)...");
+            self.push_log("Waiting for instance (up to 2 min)...");
             let instance = match self.instance_mgr.wait_for_instance(&pack.slug, &pack.title).await {
                 Ok(inst) => inst,
                 Err(e) => {
-                    self.push_log(&format!("⚠️ {}", e));
-                    self.push_log("💡 Make sure Modrinth App is installed, or use '--modpack <slug>'");
+                    self.push_log(&format!("{}", e));
+                    self.push_log("Make sure Modrinth App is installed, or use '--modpack <slug>'");
                     self.reset();
                     return Ok(());
                 }
             };
-            self.push_log(&format!("📂 Instance: {}", instance.path.display()));
-            self.push_log("💉 Injecting challenge mod...");
+            self.push_log(&format!("Instance: {}", instance.path.display()));
+            self.push_log("Injecting challenge mod...");
             self.inject_challenge(&instance).await?;
             self.state = AppState::Running;
             self.timer_start = Some(Instant::now());
             self.monitor.start(instance.path.clone());
-            self.push_log("🚀 Challenge active! Get the item!");
+            self.push_log("Challenge active! Get the item!");
         }
         Ok(())
     }
@@ -202,18 +202,18 @@ impl App {
         let dest = instance.mods_dir.join("challenge-hud.jar");
         std::fs::create_dir_all(&instance.mods_dir)?;
         std::fs::write(&dest, file.contents())?;
-        self.push_log(&format!("✅ Wrote {}", dest.display()));
+        self.push_log(&format!("Wrote {}", dest.display()));
 
         let pool = ItemPool::default();
         let target = pool.random();
         let challenge = ChallengeConfig::new(target.clone(), pool.items);
         challenge.write_to(&instance.config_dir)?;
         self.challenge = Some(challenge);
-        self.push_log(&format!("🎲 Target: {} (5min deadline)", target));
+        self.push_log(&format!("Target: {} (5min deadline)", target));
         Ok(())
     }
 
-    async fn cancel_run(&mut self) -> Result<()> { self.push_log("❌ Cancelled"); self.reset(); Ok(()) }
+    async fn cancel_run(&mut self) -> Result<()> { self.push_log("Cancelled"); self.reset(); Ok(()) }
 
     async fn cleanup_and_reset(&mut self) -> Result<()> {
         self.state = AppState::Cleaning;
@@ -222,13 +222,13 @@ impl App {
         let cleanup_title = self.current_pack.as_ref().map(|p| p.title.clone());
         if let Some(ref slug) = cleanup_slug {
             if let Err(e) = clean_instance(slug, cleanup_title.as_deref().unwrap_or(slug)).await {
-                self.push_log(&format!("⚠️ Cleanup issue: {}", e));
+                self.push_log(&format!("Cleanup issue: {}", e));
             }
             let work_dir = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
             let direct = work_dir.join(slug);
             if direct.exists() { std::fs::remove_dir_all(&direct).ok(); }
         }
-        self.push_log("✅ Cleaned up");
+        self.push_log("Cleaned up");
         self.reset();
         Ok(())
     }
@@ -248,7 +248,7 @@ impl App {
             if let Ok(Some(res)) = self.monitor.check_result() {
                 self.result = Some(res);
                 self.state = AppState::AutoCleanup;
-                self.push_log("🏁 RUN COMPLETE! Minecraft will close automatically...");
+                self.push_log("RUN COMPLETE! Minecraft will close automatically...");
                 self.auto_cleanup_timer = Some(std::time::Instant::now());
             }
         }
@@ -260,10 +260,10 @@ impl App {
                     let title = self.current_pack.as_ref().map(|p| p.title.clone());
                     if let Some(ref s) = slug {
                         if let Err(e) = clean_instance(s, title.as_deref().unwrap_or(s)).await {
-                            self.push_log(&format!("⚠️ Cleanup issue: {}", e));
+                            self.push_log(&format!("Cleanup issue: {}", e));
                         }
                     }
-                    self.push_log("✅ Cleaned up");
+                    self.push_log("Cleaned up");
                     self.reset();
                 }
             }

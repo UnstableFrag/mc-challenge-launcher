@@ -9,12 +9,15 @@ use std::path::Path;
 pub struct Modpack {
     pub slug: String,
     pub title: String,
+    #[serde(default)]
     pub author: String,
     #[serde(default)]
     pub versions: Vec<String>,
     #[serde(default)]
     pub categories: Vec<String>,
+    #[serde(default)]
     pub downloads: u64,
+    #[serde(default, alias = "followers")]
     pub follows: u64,
     pub description: Option<String>,
 }
@@ -114,7 +117,7 @@ impl ModrinthApi {
         let resp = self.client
             .get("https://api.modrinth.com/v2/search")
             .query(&[
-                ("facets", "[[\"project_type:modpack\"],[\"follows:>100\"]]"),
+                ("facets", "[[\"project_type:modpack\"],[\"follows>100\"]]"),
                 ("limit", "1"),
                 ("offset", &offset.to_string()),
                 ("index", "follows"),

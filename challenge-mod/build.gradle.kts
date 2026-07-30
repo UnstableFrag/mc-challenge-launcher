@@ -1,16 +1,7 @@
-pluginManagement {
-    repositories {
-        mavenCentral()
-        maven("https://maven.fabricmc.net/")
-        maven("https://maven.architectury.dev/")
-        gradlePluginPortal()
-    }
-}
-
 plugins {
     id("java")
-    id("fabric-loom") version "1.6.0"
-    id("architectury") version "2.1.1"
+    id("fabric-loom")
+    id("architectury")
 }
 
 group = "com.github.mcchallenge"

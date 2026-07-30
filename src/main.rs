@@ -42,15 +42,21 @@ async fn main() -> Result<()> {
     let mut terminal = init_tui()?;
     let mut app = App::new(args.modpack).await?;
     loop {
-        terminal.draw(|f| app.ui(f))?;
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
+        let _ = terminal.draw(|f| app.ui(f));
+        if let Ok(true) = event::poll(Duration::from_millis(50)) {
+            if let Ok(Event::Key(key)) = event::read() {
                 if key.kind == KeyEventKind::Press {
-                    if app.handle_key(key.code).await? { break; }
+                    match app.handle_key(key.code).await {
+                        Ok(true) => break,
+                        Err(e) => app.push_log(&format!("❌ {}", e)),
+                        _ => {}
+                    }
                 }
             }
         }
-        app.tick().await?;
+        if let Err(e) = app.tick().await {
+            app.push_log(&format!("❌ tick error: {}", e));
+        }
     }
     restore_tui(&mut terminal)?;
     Ok(())
@@ -71,6 +77,23 @@ struct App {
 }
 
 enum AppState { Idle, Searching, OpeningModrinth, Injecting, Running, Completed, AutoCleanup, Cleaning }
+
+fn normalize_key(key: KeyCode) -> KeyCode {
+    match key {
+        KeyCode::Char(c) => {
+            let lower = c.to_ascii_lowercase();
+            let mapped = match lower {
+                'r' | 'к' => 'r',
+                'q' | 'й' => 'q',
+                'c' | 'с' => 'c',
+                'x' | 'ч' => 'x',
+                other => other,
+            };
+            KeyCode::Char(mapped)
+        }
+        other => other,
+    }
+}
 
 impl App {
     async fn new(modpack_slug: Option<String>) -> Result<Self> {
@@ -96,6 +119,7 @@ impl App {
     }
 
     async fn handle_key(&mut self, key: KeyCode) -> Result<bool> {
+        let key = normalize_key(key);
         match (key, &self.state) {
             (KeyCode::Char('q'), _) => return Ok(true),
             (KeyCode::Char('r'), AppState::Idle) => self.start_roll().await?,
@@ -125,7 +149,14 @@ impl App {
         if self.modpack_slug.is_some() {
             self.state = AppState::Injecting;
             self.push_log("📥 Downloading & extracting .mrpack...");
-            let instance = self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client()).await?;
+            let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client()).await {
+                Ok(inst) => inst,
+                Err(e) => {
+                    self.push_log(&format!("⚠️ Download failed: {}", e));
+                    self.reset();
+                    return Ok(());
+                }
+            };
             self.push_log(&format!("📂 Instance: {}", instance.path.display()));
             self.push_log("💉 Injecting challenge mod...");
             self.inject_challenge(&instance).await?;
@@ -136,10 +167,23 @@ impl App {
         } else {
             self.state = AppState::OpeningModrinth;
             self.push_log("📦 Opening in Modrinth App...");
-            open::that(format!("modrinth://modpack/{}", pack.slug))?;
+            if let Err(e) = open::that(format!("modrinth://modpack/{}", pack.slug)) {
+                self.push_log(&format!("⚠️ Could not open Modrinth App: {}", e));
+                self.push_log("💡 Use '--modpack <slug>' for direct download mode");
+                self.reset();
+                return Ok(());
+            }
             self.state = AppState::Injecting;
-            self.push_log("⏳ Waiting for instance...");
-            let instance = self.instance_mgr.wait_for_instance(&pack.slug, &pack.title).await?;
+            self.push_log("⏳ Waiting for instance (up to 2 min)...");
+            let instance = match self.instance_mgr.wait_for_instance(&pack.slug, &pack.title).await {
+                Ok(inst) => inst,
+                Err(e) => {
+                    self.push_log(&format!("⚠️ {}", e));
+                    self.push_log("💡 Make sure Modrinth App is installed, or use '--modpack <slug>'");
+                    self.reset();
+                    return Ok(());
+                }
+            };
             self.push_log(&format!("📂 Instance: {}", instance.path.display()));
             self.push_log("💉 Injecting challenge mod...");
             self.inject_challenge(&instance).await?;
@@ -173,14 +217,16 @@ impl App {
 
     async fn cleanup_and_reset(&mut self) -> Result<()> {
         self.state = AppState::Cleaning;
+        self.push_log("🧹 Cleaning up...");
         if let Some(pack) = &self.current_pack { 
-            clean_instance(&pack.slug, &pack.title).await?;
-            // Also clean direct instance in work_dir
+            if let Err(e) = clean_instance(&pack.slug, &pack.title).await {
+                self.push_log(&format!("⚠️ Cleanup issue: {}", e));
+            }
             let work_dir = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
             let direct = work_dir.join(&pack.slug);
             if direct.exists() { std::fs::remove_dir_all(&direct).ok(); }
         }
-        self.push_log("🧹 Cleaned up");
+        self.push_log("✅ Cleaned up");
         self.reset();
         Ok(())
     }
@@ -197,7 +243,7 @@ impl App {
 
     async fn tick(&mut self) -> Result<()> {
         if let AppState::Running = self.state {
-            if let Some(res) = self.monitor.check_result()? {
+            if let Ok(Some(res)) = self.monitor.check_result() {
                 self.result = Some(res);
                 self.state = AppState::AutoCleanup;
                 self.push_log("🏁 RUN COMPLETE! Minecraft will close automatically...");
@@ -208,8 +254,12 @@ impl App {
             if let Some(started) = self.auto_cleanup_timer {
                 if started.elapsed().as_secs() >= 10 {
                     self.state = AppState::Cleaning;
-                    if let Some(pack) = &self.current_pack { clean_instance(&pack.slug, &pack.title).await?; }
-                    self.push_log("🧹 Cleaned up");
+                    if let Some(pack) = &self.current_pack {
+                        if let Err(e) = clean_instance(&pack.slug, &pack.title).await {
+                            self.push_log(&format!("⚠️ Cleanup issue: {}", e));
+                        }
+                    }
+                    self.push_log("✅ Cleaned up");
                     self.reset();
                 }
             }

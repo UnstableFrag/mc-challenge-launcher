@@ -6,7 +6,7 @@ pluginManagement {
         gradlePluginPortal()
     }
     plugins {
-        id("fabric-loom") version "1.6.0"
+        id("fabric-loom") version "1.17.17"
         id("architectury") version "2.1.1"
     }
 }

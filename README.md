@@ -9,7 +9,9 @@
 3. **Auto-injects** — drops `challenge-hud.jar` + config into the instance
 4. **Play** — beautiful in-game HUD shows target item + live timer
 5. **Get the item** — full-screen 🏁 victory screen with confetti
-6. **Press [X]** — wipes the instance clean, ready for next run
+6. **Minecraft auto-closes** after the challenge ends (5-second timer)
+7. **Auto-cleanup** — instance is wiped automatically, ready for the next round
+8. **Press [X]** — manually wipe instance + reset at any time
 
 ## Requirements
 

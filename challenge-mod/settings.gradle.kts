@@ -7,8 +7,8 @@ pluginManagement {
         mavenCentral()
     }
     plugins {
-        id("fabric-loom") version "1.17.17"
-        id("architectury") version "3.4.160"
+    id("fabric-loom") version "1.17.17"
+    id("architectury-plugin") version "3.4.160"   // было: id("architectury")
     }
 }
 

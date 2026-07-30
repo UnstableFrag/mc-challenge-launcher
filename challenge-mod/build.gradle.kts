@@ -1,7 +1,7 @@
 plugins {
     id("java")
     id("fabric-loom")
-    id("architectury")
+    id("architectury") version "3.4.160"
 }
 
 group = "com.github.mcchallenge"

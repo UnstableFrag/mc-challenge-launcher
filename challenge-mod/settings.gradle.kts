@@ -1,13 +1,14 @@
 pluginManagement {
     repositories {
-        mavenCentral()
-        maven { url = uri("https://maven.fabricmc.net/") }
-        maven { url = uri("https://maven.architectury.dev/") }
+        maven("https://maven.architectury.dev/")
+        maven("https://maven.fabricmc.net/")
+        maven("https://maven.minecraftforge.net/")
         gradlePluginPortal()
+        mavenCentral()
     }
     plugins {
         id("fabric-loom") version "1.17.17"
-        id("architectury") version "2.1.1"
+        id("architectury") version "3.4.160"
     }
 }
 

@@ -1,7 +1,8 @@
+// src/modrinth.rs
 use anyhow::Result;
+use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
-use rand::Rng;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct Modpack {

@@ -1,7 +1,7 @@
+// src/cleanup.rs
 use anyhow::Result;
 use dirs;
 use std::fs;
-use std::path::Path;
 
 pub async fn clean_instance(slug: &str) -> Result<()> {
     let base = if cfg!(windows) {

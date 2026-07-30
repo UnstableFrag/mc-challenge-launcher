@@ -1,3 +1,4 @@
+// src/challenge.rs
 use anyhow::Result;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};

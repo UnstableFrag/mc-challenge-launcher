@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use std::io::{self, Stdout};
@@ -242,7 +242,7 @@ impl App {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![Span::styled("🏁 DONE! ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)), Span::raw(&res.player)]));
                 lines.push(Line::from(vec![Span::styled("   Item: ", Style::default().fg(Color::Yellow)), Span::raw(&res.item)]));
-                lines.push(Line::from(vec![Span::styled("   Time: ", Style::default().fg(Color::Cyan)), Span::raw(format!("{:?}", res.time))]));
+                lines.push(Line::from(vec![Span::styled("   Time: ", Style::default().fg(Color::Cyan)), Span::raw(format!("{} ticks", res.time_ticks))]));
             }
         } else {
             lines.push(Line::from("Press [R] to roll a random modpack"));
@@ -261,11 +261,9 @@ impl App {
                 .ratio((elapsed % 60.0) / 60.0)
                 .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60))
         } else if let AppState::Completed = self.state {
-            Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again").alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Result"))
+            Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again").alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result"))
         } else {
-            Paragraph::new("Waiting for challenge...").alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Status"))
+            Paragraph::new("Waiting for challenge...").alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Status"))
         };
         f.render_widget(right, main_chunks[1]);
         

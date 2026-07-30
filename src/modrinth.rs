@@ -101,7 +101,7 @@ impl ModrinthApi {
             .or_else(|| version.files.iter().find(|f| f.filename.ends_with(".mrpack")))
             .ok_or_else(|| anyhow::anyhow!("No .mrpack file in version"))?;
 
-        let mut resp = self.client.get(&file.url).send().await?;
+        let resp = self.client.get(&file.url).send().await?;
         let bytes = resp.bytes().await?;
         std::fs::write(dest, bytes)?;
         Ok(())

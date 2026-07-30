@@ -1,6 +1,5 @@
 // src/instance.rs
 use anyhow::Result;
-use serde_json::Value;
 use std::io::Read;
 use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
@@ -110,7 +109,7 @@ impl InstanceManager {
         fs::create_dir_all(&mods_dir)?;
         fs::create_dir_all(&config_dir)?;
 
-        for (path, file_info) in files {
+        for (path, _file_info) in files {
             let dest = if path.starts_with("mods/") {
                 mods_dir.join(path.strip_prefix("mods/").unwrap())
             } else if path.starts_with("config/") || path.starts_with("overrides/") {

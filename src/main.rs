@@ -109,7 +109,8 @@ impl App {
     }
 
     async fn start_roll(&mut self) -> Result<()> {
-        let pack = if let Some(slug) = &self.modpack_slug {
+        let slug_clone = self.modpack_slug.clone();
+        let pack = if let Some(slug) = &slug_clone {
             self.push_log(&format!("🎯 Using specified modpack: {}", slug));
             self.api.modpack_by_slug(slug).await?
         } else {
@@ -229,6 +230,7 @@ impl App {
             AppState::Running => "🏃 RUNNING — Get the item!",
             AppState::AutoCleanup => "🧹 AUTO-CLEANUP — Minecraft closing...",
             AppState::Cleaning => "🧹 CLEANING...",
+            _ => "🎲 IDLE — Press [R] to roll",
         };
         f.render_widget(
             Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))

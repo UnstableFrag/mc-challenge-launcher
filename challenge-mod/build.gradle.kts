@@ -16,9 +16,10 @@ repositories {
 
 dependencies {
     minecraft("com.mojang:minecraft:1.21.1")
-    mappings("net.fabricmc:yarn:1.21.1+build.1:v2")
-    modImplementation("dev.architectury:architectury-api:13.0.8")  // ← версия под 1.21.1, уточни!
-    include("dev.architectury:architectury-api:13.0.8")
+    mappings("net.fabricmc:yarn:1.21.1+build.3:v2")
+    modImplementation("net.fabricmc.fabric-api:fabric-api:0.116.15+1.21.1")
+    modImplementation("dev.architectury:architectury-fabric:15.0.3")
+    include("dev.architectury:architectury-fabric:15.0.3")
 }
 
 tasks.jar {

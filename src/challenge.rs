@@ -1,4 +1,3 @@
-// src/challenge.rs
 use anyhow::Result;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
@@ -19,7 +18,7 @@ impl ChallengeConfig {
             version: 1,
         }
     }
-    
+
     pub fn write_to(&self, config_dir: &Path) -> Result<()> {
         std::fs::create_dir_all(config_dir)?;
         let path = config_dir.join("challenge.json");
@@ -53,8 +52,8 @@ impl Default for ItemPool {
                 "minecraft:dragon_egg".into(),
                 "#minecraft:tools".into(),
                 "#minecraft:armor".into(),
-                "#forge:ores/diamond".into(),
-            ]
+                "#minecraft:pickaxes".into(),
+            ],
         }
     }
 }

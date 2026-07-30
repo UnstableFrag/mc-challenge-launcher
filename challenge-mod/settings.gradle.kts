@@ -8,7 +8,7 @@ pluginManagement {
     }
     plugins {
     id("fabric-loom") version "1.17.17"
-    id("architectury-plugin") version "3.4.160"   // было: id("architectury")
+    id("architectury-plugin") version "3.4.160"
     }
 }
 

@@ -58,13 +58,15 @@ jobs:
           name: challenge-mod
           path: assets/
 
-      - name: Rename mod jar
+      - name: Place mod jar into assets/challenge-mod/
         shell: pwsh
         run: |
-          Remove-Item assets/challenge-mod.jar -Force -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force assets/challenge-mod     -ErrorAction SilentlyContinue
+          Remove-Item          -Force assets/challenge-mod.jar -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path assets/challenge-mod | Out-Null
           $jar = Get-ChildItem assets/*.jar | Select-Object -First 1
           if (-not $jar) { throw "No mod jar found in assets/" }
-          Move-Item -Path $jar.FullName -Destination "assets/challenge-mod.jar" -Force
+          Move-Item -Path $jar.FullName -Destination "assets/challenge-mod/challenge-mod.jar" -Force
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

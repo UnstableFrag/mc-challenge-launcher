@@ -1,7 +1,6 @@
-// src/monitor.rs
 use anyhow::Result;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Deserialize, Debug)]
 pub struct RunResult {
@@ -11,16 +10,16 @@ pub struct RunResult {
 }
 
 pub struct Monitor {
-    result_path: Option<std::path::PathBuf>,
+    result_path: Option<PathBuf>,
 }
 
 impl Monitor {
     pub fn new() -> Self { Self { result_path: None } }
-    
+
     pub fn start(&mut self, instance_path: PathBuf) {
         self.result_path = Some(instance_path.join("logs/challenge_result.json"));
     }
-    
+
     pub fn check_result(&self) -> Result<Option<RunResult>> {
         if let Some(path) = &self.result_path {
             if path.exists() {

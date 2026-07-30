@@ -1,4 +1,3 @@
-// src/main.rs
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
@@ -6,18 +5,18 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
     Terminal,
 };
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
-use tokio::time::sleep;
 
 mod modrinth;
 mod instance;
 mod challenge;
 mod monitor;
 mod cleanup;
+mod embed;
 
 use modrinth::ModrinthApi;
 use instance::InstanceManager;
@@ -29,10 +28,8 @@ use cleanup::clean_instance;
 async fn main() -> Result<()> {
     let mut terminal = init_tui()?;
     let mut app = App::new().await?;
-    
     loop {
         terminal.draw(|f| app.ui(f))?;
-        
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
@@ -42,10 +39,8 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        
         app.tick().await?;
     }
-    
     restore_tui(&mut terminal)?;
     Ok(())
 }
@@ -86,13 +81,13 @@ impl App {
             log_lines: vec!["🎲 Modpack Challenge Launcher ready".into()],
         })
     }
-    
+
     fn push_log(&mut self, msg: &str) {
         let ts = chrono::Local::now().format("%H:%M:%S");
         self.log_lines.push(format!("[{}] {}", ts, msg));
         if self.log_lines.len() > 100 { self.log_lines.remove(0); }
     }
-    
+
     async fn handle_key(&mut self, key: KeyCode) -> Result<bool> {
         match (key, &self.state) {
             (KeyCode::Char('q'), _) => return Ok(true),
@@ -103,55 +98,51 @@ impl App {
         }
         Ok(false)
     }
-    
+
     async fn start_roll(&mut self) -> Result<()> {
         self.state = AppState::Searching;
         self.push_log("🔍 Searching random modpack...");
-        
         let pack = self.api.random_modpack().await?;
         self.current_pack = Some(pack.clone());
         self.push_log(&format!("🎯 Found: {}", pack.title));
-        
         self.state = AppState::OpeningModrinth;
         self.push_log("📦 Opening in Modrinth App...");
         open::that(format!("modrinth://modpack/{}", pack.slug))?;
-        
         self.state = AppState::Injecting;
         self.push_log("⏳ Waiting for instance...");
         let instance = self.instance_mgr.wait_for_instance(&pack.slug).await?;
-        
         self.push_log("💉 Injecting challenge mod...");
         self.inject_challenge(&instance).await?;
-        
         self.state = AppState::Running;
         self.timer_start = Some(Instant::now());
         self.monitor.start(instance.path.clone());
         self.push_log("🚀 Challenge active! Get the item!");
-        
         Ok(())
     }
-    
+
     async fn inject_challenge(&mut self, instance: &instance::Instance) -> Result<()> {
-        let mod_jar = std::env::var("CHALLENGE_MOD_JAR")?;
+        let file = embed::MOD_JAR_DIR
+            .get_file(embed::MOD_JAR_NAME)
+            .ok_or_else(|| anyhow::anyhow!("embedded mod jar missing in binary"))?;
+
         let dest = instance.mods_dir.join("challenge-hud.jar");
         std::fs::create_dir_all(&instance.mods_dir)?;
-        std::fs::copy(&mod_jar, &dest)?;
-        
+        std::fs::write(&dest, file.contents())?;
+
         let pool = ItemPool::default();
         let target = pool.random();
         self.challenge = Some(ChallengeConfig::new(target.clone()));
         self.challenge.as_ref().unwrap().write_to(&instance.config_dir)?;
-        
         self.push_log(&format!("🎲 Target: {}", target));
         Ok(())
     }
-    
+
     async fn cancel_run(&mut self) -> Result<()> {
         self.push_log("❌ Cancelled");
         self.reset();
         Ok(())
     }
-    
+
     async fn cleanup_and_reset(&mut self) -> Result<()> {
         self.state = AppState::Cleaning;
         if let Some(pack) = &self.current_pack {
@@ -161,7 +152,7 @@ impl App {
         self.reset();
         Ok(())
     }
-    
+
     fn reset(&mut self) {
         self.state = AppState::Idle;
         self.current_pack = None;
@@ -170,7 +161,7 @@ impl App {
         self.result = None;
         self.monitor = Monitor::new();
     }
-    
+
     async fn tick(&mut self) -> Result<()> {
         if let AppState::Running = self.state {
             if let Some(res) = self.monitor.check_result()? {
@@ -187,7 +178,7 @@ impl App {
         }
         Ok(())
     }
-    
+
     fn ui(&mut self, f: &mut ratatui::Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -198,7 +189,7 @@ impl App {
                 Constraint::Length(3),
             ])
             .split(f.area());
-        
+
         let title = match self.state {
             AppState::Idle => "🎲 IDLE — Press [R] to roll",
             AppState::Searching => "🔍 SEARCHING...",
@@ -209,16 +200,18 @@ impl App {
             AppState::Cleaning => "🧹 CLEANING...",
         };
         f.render_widget(
-            Paragraph::new(title).style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                .alignment(Alignment::Center).block(Block::default().borders(Borders::ALL)),
+            Paragraph::new(title)
+                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL)),
             chunks[0],
         );
-        
+
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
             .split(chunks[1]);
-        
+
         let mut lines = vec![];
         if let Some(pack) = &self.current_pack {
             lines.push(Line::from(vec![Span::styled("📦 ", Style::default().fg(Color::Yellow)), Span::raw(&pack.title)]));
@@ -247,32 +240,42 @@ impl App {
         } else {
             lines.push(Line::from("Press [R] to roll a random modpack"));
         }
-        
         f.render_widget(
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true }).block(Block::default().borders(Borders::ALL).title("Pack / Challenge")),
             main_chunks[0],
         );
-        
+
         let right = if let AppState::Running = self.state {
             let elapsed = self.timer_start.unwrap().elapsed().as_secs_f32();
-            Gauge::default()
-                .block(Block::default().borders(Borders::ALL).title("⏱️  Timer"))
-                .gauge_style(Style::default().fg(Color::Cyan))
-                .ratio((elapsed % 60.0) / 60.0)
-                .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60))
+            ratatui::widgets::Widget::render(
+                Gauge::default()
+                    .block(Block::default().borders(Borders::ALL).title("⏱️  Timer"))
+                    .gauge_style(Style::default().fg(Color::Cyan))
+                    .ratio((elapsed % 60.0) / 60.0)
+                    .label(format!("{:02}:{:02}", elapsed as u64 / 60, elapsed as u64 % 60)),
+                main_chunks[1], f.buf_mut());
+            return; // gauge отрендерен вручную, чтобы не бороться с типами в if/else
         } else if let AppState::Completed = self.state {
-            Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again").alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Result"))
+            Paragraph::new("✅ Challenge completed!\nPress [X] to cleanup and roll again")
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Result"))
         } else {
-            Paragraph::new("Waiting for challenge...").alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title("Status"))
+            Paragraph::new("Waiting for challenge...")
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title("Status"))
         };
-        f.render_widget(right, main_chunks[1]);
-        
+        // если мы не в Running — рендерим Paragraph; если в Running — уже вышли выше
+        let _ = right; // (ниже общий рендер для не-Running веток)
+        if !matches!(self.state, AppState::Running) {
+            f.render_widget(right, main_chunks[1]);
+        }
+
         let log_text = Text::from(self.log_lines.join("\n"));
         f.render_widget(
             Paragraph::new(log_text).block(Block::default().borders(Borders::ALL).title("Log")).wrap(Wrap { trim: true }),
             chunks[2],
         );
-        
+
         let help = match self.state {
             AppState::Idle => "[R] Roll  [Q] Quit",
             AppState::Running => "[C] Cancel  [Q] Quit",

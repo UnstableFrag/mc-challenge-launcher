@@ -9,7 +9,9 @@ pub struct Modpack {
     pub slug: String,
     pub title: String,
     pub author: String,
+    #[serde(default)]
     pub versions: Vec<String>,
+    #[serde(default)]
     pub categories: Vec<String>,
     pub downloads: u64,
     pub follows: u64,

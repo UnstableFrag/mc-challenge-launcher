@@ -2,7 +2,6 @@
 name = "mc-challenge-launcher"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
 ratatui = "0.26"
@@ -24,6 +23,3 @@ open = "5.0"
 tempfile = "3.5"
 include_dir = "0.7"
 textwrap = "0.16"
-
-[build-dependencies]
-include_dir = "0.7"

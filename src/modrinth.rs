@@ -183,10 +183,11 @@ impl ModrinthApi {
         let facets = r#"[["project_type:modpack"]]"#;
         for _ in 0..10 {
             let offset = rand::thread_rng().gen_range(0..500);
+            let offset_str = offset.to_string();
             let resp = self.client
                 .get("https://api.modrinth.com/v2/search")
                 .header("User-Agent", UA)
-                .query(&[("facets", &facets), ("limit", "100"), ("offset", &offset.to_string())])
+                .query(&[("facets", facets.as_str()), ("limit", "100"), ("offset", offset_str.as_str())])
                 .send().await?;
 
             let status = resp.status();

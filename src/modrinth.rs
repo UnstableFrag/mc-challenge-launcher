@@ -187,7 +187,7 @@ impl ModrinthApi {
             let resp = self.client
                 .get("https://api.modrinth.com/v2/search")
                 .header("User-Agent", UA)
-                .query(&[("facets", facets.as_str()), ("limit", "100"), ("offset", offset_str.as_str())])
+                .query(&[("facets", facets), ("limit", "100"), ("offset", offset_str.as_str())])
                 .send().await?;
 
             let status = resp.status();

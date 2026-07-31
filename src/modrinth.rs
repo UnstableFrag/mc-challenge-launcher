@@ -3,10 +3,9 @@ use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
 
-const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
+use crate::embed::SUPPORTED_VERSIONS;
 
-const REQUIRED_VERSION: &str = "1.21.1";
-const REQUIRED_LOADER: &str = "neoforge";
+const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone)]
 pub struct Modpack {
@@ -16,6 +15,34 @@ pub struct Modpack {
     pub versions: Vec<String>,
     pub categories: Vec<String>,
     pub description: Option<String>,
+}
+
+impl Modpack {
+    /// Лучшая поддерживаемая версия модпака (максимум покрытия) или None
+    pub fn pick_version(&self) -> Option<String> {
+        SUPPORTED_VERSIONS.iter()
+            .filter(|v| self.versions.iter().any(|pv| pv == *v))
+            .max_by(|a, b| version_cmp(a, b))
+            .map(|s| s.to_string())
+    }
+
+    pub fn versions_str(&self) -> String {
+        self.versions.join(", ")
+    }
+}
+
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.').filter_map(|p| p.parse::<u32>().ok()).collect()
+    };
+    let va = parse(a);
+    let vb = parse(b);
+    for i in 0..va.len().max(vb.len()) {
+        let x = va.get(i).copied().unwrap_or(0);
+        let y = vb.get(i).copied().unwrap_or(0);
+        if x != y { return x.cmp(&y); }
+    }
+    std::cmp::Ordering::Equal
 }
 
 pub struct ModrinthApi {
@@ -67,14 +94,10 @@ impl ModrinthApi {
         Ok(resp.json::<serde_json::Value>().await?)
     }
 
-    fn is_compatible(json: &serde_json::Value) -> bool {
-        let versions_ok = json["game_versions"].as_array()
-            .map(|a| a.iter().any(|v| v.as_str() == Some(REQUIRED_VERSION)))
-            .unwrap_or(false);
-        let loader_ok = json["loaders"].as_array()
-            .map(|a| a.iter().any(|l| l.as_str() == Some(REQUIRED_LOADER)))
-            .unwrap_or(false);
-        versions_ok && loader_ok
+    fn has_supported_version(json: &serde_json::Value) -> bool {
+        json["game_versions"].as_array()
+            .map(|a| a.iter().any(|v| SUPPORTED_VERSIONS.contains(&v.as_str().unwrap_or(""))))
+            .unwrap_or(false)
     }
 
     fn author_of(json: &serde_json::Value) -> String {
@@ -134,7 +157,7 @@ impl ModrinthApi {
                 let info = pack.modrinth_info.as_ref().unwrap();
 
                 if let Ok(json) = self.project_json(&info.slug).await {
-                    if !Self::is_compatible(&json) {
+                    if !Self::has_supported_version(&json) {
                         continue;
                     }
                     return Ok(Modpack {
@@ -152,15 +175,13 @@ impl ModrinthApi {
                 }
             }
         }
+        // 5 страниц не дали результата — расширяем диапазон страниц
         bail!("no compatible modpack found on Modpack Index")
     }
 
     async fn random_from_search(&self) -> Result<Modpack> {
-        let facets = format!(
-            r#"[["project_type:modpack"],["versions:{}"],["categories:{}"]]"#,
-            REQUIRED_VERSION, REQUIRED_LOADER
-        );
-        for _ in 0..3 {
+        let facets = r#"[["project_type:modpack"]]"#;
+        for _ in 0..10 {
             let offset = rand::thread_rng().gen_range(0..500);
             let resp = self.client
                 .get("https://api.modrinth.com/v2/search")
@@ -179,18 +200,31 @@ impl ModrinthApi {
 
             if !search.hits.is_empty() {
                 let hit = &search.hits[rand::thread_rng().gen_range(0..search.hits.len())];
-                return Ok(Modpack {
-                    slug: hit.slug.clone(),
-                    title: hit.title.clone(),
-                    author: String::new(),
-                    versions: vec![],
-                    categories: hit.categories.clone(),
-                    description: hit.description.clone(),
-                });
+                if let Ok(json) = self.project_json(&hit.slug).await {
+                    if Self::has_supported_version(&json) {
+                        return Ok(Modpack {
+                            slug: hit.slug.clone(),
+                            title: hit.title.clone(),
+                            author: Self::author_of(&json),
+                            versions: json["game_versions"].as_array()
+                                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                .unwrap_or_default(),
+                            categories: hit.categories.clone(),
+                            description: hit.description.clone(),
+                        });
+                    }
+                }
             }
         }
-        let slug = FALLBACK_MODPACKS[rand::thread_rng().gen_range(0..FALLBACK_MODPACKS.len())];
-        self.modpack_by_slug(slug).await
+        for _ in 0..10 {
+            let slug = FALLBACK_MODPACKS[rand::thread_rng().gen_range(0..FALLBACK_MODPACKS.len())];
+            if let Ok(pack) = self.modpack_by_slug(slug).await {
+                if pack.pick_version().is_some() {
+                    return Ok(pack);
+                }
+            }
+        }
+        bail!("no compatible modpack found (all fallback slugs unsupported)")
     }
 }
 

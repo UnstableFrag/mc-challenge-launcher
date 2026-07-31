@@ -14,8 +14,8 @@
   },
   "mixins": [],
   "depends": {
-    "fabricloader": ">=0.14.0",
-    "minecraft": "~1.21.1",
-    "architectury": ">=9.1.13"
+    "fabricloader": "${loaderVersion}",
+    "minecraft": "~${mcVersion}",
+    "architectury": ">=${archVersion}"
   }
 }

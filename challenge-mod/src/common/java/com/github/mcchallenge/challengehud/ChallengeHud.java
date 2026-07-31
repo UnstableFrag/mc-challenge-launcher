@@ -1,9 +1,7 @@
 package com.github.mcchallenge.challengehud;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import dev.architectury.event.events.client.ClientTickEvent;
 import dev.architectury.event.events.client.HudRenderCallback;
-import dev.architectury.platform.Platform;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
@@ -19,7 +17,6 @@ import org.slf4j.LoggerFactory;
 import java.awt.*;
 import java.io.File;
 import java.io.FileWriter;
-import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -89,7 +86,7 @@ public class ChallengeHud implements ClientModInitializer {
 
         switch (challengeType) {
             case ITEM -> {
-                if (client.player.getInventory().containsAny(stack -> ItemStack.areItemsEqual(stack, targetStack))) {
+                if (client.player.getInventory().containsAny(stack -> stack.isOf(targetStack.getItem()))) {
                     complete(client);
                 }
             }
@@ -200,43 +197,16 @@ public class ChallengeHud implements ClientModInitializer {
     }
 
     private void loadConfig() {
-        try {
-            File configFile = new File(Platform.getConfigFolder().toFile(), "challenge/challenge.json");
-            if (configFile.exists()) {
-                String json = Files.readString(configFile.toPath());
-                JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
-                String target = obj.get("target").getAsString();
-                Identifier id = new Identifier(target);
-                var item = Registries.ITEM.get(id);
-                targetStack = item != null && item != Items.AIR ? new ItemStack(item) : ItemStack.EMPTY;
-
-                if (targetStack.isEmpty()) {
-                    pickRandomTarget();
-                } else {
-                    LOGGER.info("Config target: {}", target);
-                }
-            } else {
-                pickRandomTarget();
-            }
-
-            startTime = Instant.now();
-            if (client.world != null) {
-                deadlineTicks = client.world.getTime() + CHALLENGE_TICKS;
-            } else {
-                deadlineTicks = CHALLENGE_TICKS;
-            }
-            active = true;
-            completed = false;
-            challengeType = ChallengeType.ITEM;
-        } catch (Exception e) {
-            LOGGER.warn("No challenge config, using random target");
-            pickRandomTarget();
-            startTime = Instant.now();
+        pickRandomTarget();
+        startTime = Instant.now();
+        if (client.world != null) {
+            deadlineTicks = client.world.getTime() + CHALLENGE_TICKS;
+        } else {
             deadlineTicks = CHALLENGE_TICKS;
-            active = true;
-            completed = false;
-            challengeType = ChallengeType.ITEM;
         }
+        active = true;
+        completed = false;
+        challengeType = ChallengeType.ITEM;
     }
 
     private static class WinScreen extends Screen {

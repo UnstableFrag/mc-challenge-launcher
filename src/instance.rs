@@ -67,23 +67,38 @@ impl InstanceManager {
         anyhow::bail!("Instance not found for slug={} title={}", slug, title)
     }
 
-    pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client) -> Result<Instance> {
+    pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client, preferred_version: Option<&str>) -> Result<Instance> {
         let version_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
         let versions = client
             .get(&version_url)
-            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .header("User-Agent", "mc-challenge-launcher/0.3")
             .send().await?
             .json::<serde_json::Value>().await?;
 
-        let mrpack_url = versions.as_array()
-            .and_then(|v| v.iter().find(|ver| {
+        let mut candidates: Vec<&serde_json::Value> = versions.as_array()
+            .map(|v| v.iter().filter(|ver| {
                 ver["files"].as_array().map(|f| {
                     f.iter().any(|file| file["filename"].as_str().map(|n| n.ends_with(".mrpack")).unwrap_or(false))
                 }).unwrap_or(false)
-            }))
-            .and_then(|ver| ver["files"].as_array().and_then(|f| {
-                f.iter().find(|file| file["filename"].as_str().map(|n| n.ends_with(".mrpack")).unwrap_or(false))
-            }))
+            }).collect())
+            .unwrap_or_default();
+
+        // Сначала версии, поддерживающие нужную MC-версию
+        if let Some(pref) = preferred_version {
+            if let Some(pos) = candidates.iter().position(|ver| {
+                ver["game_versions"].as_array()
+                    .map(|gv| gv.iter().any(|v| v.as_str() == Some(pref)))
+                    .unwrap_or(false)
+            }) {
+                candidates.swap(0, pos);
+            }
+        }
+
+        let ver = candidates.first()
+            .ok_or_else(|| anyhow::anyhow!("No .mrpack file found for {}", slug))?;
+
+        let mrpack_url = ver["files"].as_array()
+            .and_then(|f| f.iter().find(|file| file["filename"].as_str().map(|n| n.ends_with(".mrpack")).unwrap_or(false)))
             .and_then(|f| f["url"].as_str())
             .ok_or_else(|| anyhow::anyhow!("No .mrpack file found for {}", slug))?;
 
@@ -92,7 +107,7 @@ impl InstanceManager {
 
         let mrpack_data = client
             .get(mrpack_url)
-            .header("User-Agent", "mc-challenge-launcher/0.2")
+            .header("User-Agent", "mc-challenge-launcher/0.3")
             .send().await?
             .bytes().await?;
 

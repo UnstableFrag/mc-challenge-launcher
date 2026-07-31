@@ -10,8 +10,12 @@ permissions:
 
 jobs:
   build-mod:
-    name: Build Java Mod (Architectury)
+    name: Build Java Mod (${{ matrix.mc }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mc: [1.20.1, 1.20.2, 1.20.4, 1.20.6, 1.21, 1.21.1, 1.21.2, 1.21.3, 1.21.4, 1.21.5, 1.21.6, 1.21.7, 1.21.8, 1.21.9, 1.21.10, 1.21.11]
     steps:
       - uses: actions/checkout@v4
 
@@ -26,24 +30,22 @@ jobs:
         with:
           gradle-version: '9.6.1'          # Loom 1.17 требует Gradle 9.2+
 
-      - name: Build challenge-mod
+      - name: Build challenge-mod for ${{ matrix.mc }}
         working-directory: ./challenge-mod
-        run: gradle build --no-daemon      # build, а не jar → соберёт remapJar
+        run: gradle build -Pmc=${{ matrix.mc }} --no-daemon
 
-      - name: Debug list output
-        if: always()
+      - name: Verify jar exists
         shell: bash
-        run: ls -R challenge-mod/build/libs || true
+        run: |
+          ls challenge-mod/build/libs/ || true
+          test -f challenge-mod/build/libs/challenge-hud-${{ matrix.mc }}.jar && echo "OK" || echo "MISSING"
 
       - name: Upload mod jar
         uses: actions/upload-artifact@v4
         with:
-          name: challenge-mod
-          path: |
-            challenge-mod/build/libs/*.jar
-            !challenge-mod/build/libs/*-dev.jar
-            !challenge-mod/build/libs/*-sources.jar
-          if-no-files-found: error          # падать явно, если jar нет
+          name: challenge-mod-${{ matrix.mc }}
+          path: challenge-mod/build/libs/challenge-hud-${{ matrix.mc }}.jar
+          if-no-files-found: error
 
   build-launcher:
     name: Build Rust Launcher (Windows)
@@ -52,21 +54,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download challenge-mod.jar
+      - name: Download all mod jars
         uses: actions/download-artifact@v4
         with:
-          name: challenge-mod
-          path: assets/
+          path: modjars/
 
-      - name: Place mod jar into assets/challenge-mod/
+      - name: Place mod jars into assets/challenge-mod/
         shell: pwsh
         run: |
-          Remove-Item -Recurse -Force assets/challenge-mod     -ErrorAction SilentlyContinue
-          Remove-Item          -Force assets/challenge-mod.jar -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force assets/challenge-mod -ErrorAction SilentlyContinue
+          Remove-Item -Force assets/challenge-mod.jar -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path assets/challenge-mod | Out-Null
-          $jar = Get-ChildItem assets/*.jar | Select-Object -First 1
-          if (-not $jar) { throw "No mod jar found in assets/" }
-          Move-Item -Path $jar.FullName -Destination "assets/challenge-mod/challenge-mod.jar" -Force
+          $jars = Get-ChildItem -Recurse modjars -Filter challenge-hud-*.jar
+          if ($jars.Count -eq 0) { throw "No mod jars found in modjars/" }
+          foreach ($jar in $jars) {
+            Copy-Item -Path $jar.FullName -Destination "assets/challenge-mod/$($jar.Name)" -Force
+          }
+          Get-ChildItem assets/challenge-mod | Select-Object Name, Length
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

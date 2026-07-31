@@ -124,10 +124,24 @@ impl App {
         };
         self.current_pack = Some(pack.clone());
 
+        let target_version = match pack.pick_version() {
+            Some(v) => v,
+            None => {
+                self.push_log(&format!(
+                    "Unsupported MC versions: {} (supported: {})",
+                    pack.versions_str(),
+                    embed::SUPPORTED_VERSIONS.join(", ")
+                ));
+                self.reset();
+                return Ok(());
+            }
+        };
+        self.push_log(&format!("Target MC version: {}", target_version));
+
         if self.modpack_slug.is_some() {
             self.state = AppState::Injecting;
             self.push_log("Downloading & extracting .mrpack...");
-            let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client()).await {
+            let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client(), Some(&target_version)).await {
                 Ok(inst) => inst,
                 Err(e) => {
                     self.push_log(&format!("Download failed: {}", e));
@@ -136,7 +150,7 @@ impl App {
                 }
             };
             self.push_log(&format!("Instance: {}", instance.path.display()));
-            self.inject_mod(&instance).await?;
+            self.inject_mod(&instance, &target_version).await?;
         } else {
             self.state = AppState::OpeningModrinth;
             self.push_log("Opening in Modrinth App...");
@@ -158,18 +172,19 @@ impl App {
                 }
             };
             self.push_log(&format!("Instance: {}", instance.path.display()));
-            self.inject_mod(&instance).await?;
+            self.inject_mod(&instance, &target_version).await?;
         }
         self.state = AppState::Done;
         self.push_log("Done! Launch Minecraft to start the challenge");
         Ok(())
     }
 
-    async fn inject_mod(&mut self, instance: &instance::Instance) -> Result<()> {
+    async fn inject_mod(&mut self, instance: &instance::Instance, version: &str) -> Result<()> {
+        let jar_name = embed::jar_name(version);
         let file = embed::MOD_JAR_DIR
-            .get_file(embed::MOD_JAR_NAME)
-            .ok_or_else(|| anyhow::anyhow!("embedded mod jar missing in binary"))?;
-        let dest = instance.mods_dir.join("challenge-hud.jar");
+            .get_file(&jar_name)
+            .ok_or_else(|| anyhow::anyhow!("embedded mod jar missing in binary: {}", jar_name))?;
+        let dest = instance.mods_dir.join(jar_name);
         std::fs::create_dir_all(&instance.mods_dir)?;
         std::fs::write(&dest, file.contents())?;
         self.push_log(&format!("Injected {}", dest.display()));
@@ -224,6 +239,9 @@ impl App {
             lines.push(Line::from(vec![Span::styled("📦 ", Style::default().fg(Color::Yellow)), Span::raw(&pack.title)]));
             if !pack.author.is_empty() {
                 lines.push(Line::from(vec![Span::styled("👤 ", Style::default().fg(Color::Gray)), Span::raw(&pack.author)]));
+            }
+            if !pack.versions.is_empty() {
+                lines.push(Line::from(vec![Span::styled("🎮 ", Style::default().fg(Color::Magenta)), Span::raw(pack.versions_str())]));
             }
             if !pack.categories.is_empty() {
                 lines.push(Line::from(vec![Span::styled("🏷️ ", Style::default().fg(Color::Green)), Span::raw(pack.categories.join(", "))]));

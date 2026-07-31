@@ -5,6 +5,9 @@ use serde::Deserialize;
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
 
+const REQUIRED_VERSION: &str = "1.21.1";
+const REQUIRED_LOADER: &str = "neoforge";
+
 #[derive(Debug, Clone)]
 pub struct Modpack {
     pub slug: String,
@@ -20,16 +23,16 @@ pub struct ModrinthApi {
 }
 
 const FALLBACK_MODPACKS: &[&str] = &[
-    "create",
-    "skyfactory-5",
     "allthemodium",
-    "dungeons-monsters-and-arsenic",
-    "ftbquests",
-    "enigmatica-6",
-    "dragnlo-eternity",
-    "all-the-mod-7",
-    "farming-for-blockheads",
-    "thermal-series",
+    "enigmatica-9",
+    "create",
+    "prominence-ii-rpg",
+    "dawncraft",
+    "cabin-in-the-woods",
+    "meatballcraft",
+    "sci-fi-craft",
+    "dungeons-and-taverns",
+    "disney-lands",
 ];
 
 impl ModrinthApi {
@@ -42,27 +45,59 @@ impl ModrinthApi {
     }
 
     pub async fn random_modpack(&self) -> Result<Modpack> {
-        self.random_from_index().await
+        for _ in 0..5 {
+            if let Ok(m) = self.random_from_index().await {
+                return Ok(m);
+            }
+        }
+        self.random_from_search().await
     }
 
-    pub async fn modpack_by_slug(&self, slug: &str) -> Result<Modpack> {
+    async fn project_json(&self, slug: &str) -> Result<serde_json::Value> {
         let resp = self.client
             .get(format!("https://api.modrinth.com/v2/project/{}", slug))
             .header("User-Agent", UA)
-            .send().await?
-            .json::<serde_json::Value>().await?;
+            .send().await?;
 
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!("Modrinth project {} returned {}: {}", slug, status, body.chars().take(200).collect::<String>());
+        }
+        Ok(resp.json::<serde_json::Value>().await?)
+    }
+
+    fn is_compatible(json: &serde_json::Value) -> bool {
+        let versions_ok = json["game_versions"].as_array()
+            .map(|a| a.iter().any(|v| v.as_str() == Some(REQUIRED_VERSION)))
+            .unwrap_or(false);
+        let loader_ok = json["loaders"].as_array()
+            .map(|a| a.iter().any(|l| l.as_str() == Some(REQUIRED_LOADER)))
+            .unwrap_or(false);
+        versions_ok && loader_ok
+    }
+
+    fn author_of(json: &serde_json::Value) -> String {
+        json["team"].as_array()
+            .and_then(|t| t.first())
+            .and_then(|m| m["user"]["username"].as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub async fn modpack_by_slug(&self, slug: &str) -> Result<Modpack> {
+        let json = self.project_json(slug).await?;
         Ok(Modpack {
-            slug: resp["slug"].as_str().unwrap_or(slug).to_string(),
-            title: resp["title"].as_str().unwrap_or(slug).to_string(),
-            author: String::new(),
-            versions: resp["game_versions"].as_array()
+            slug: json["slug"].as_str().unwrap_or(slug).to_string(),
+            title: json["title"].as_str().unwrap_or(slug).to_string(),
+            author: Self::author_of(&json),
+            versions: json["game_versions"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
-            categories: resp["categories"].as_array()
+            categories: json["categories"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
-            description: resp["description"].as_str().map(String::from),
+            description: json["description"].as_str().map(String::from),
         })
     }
 
@@ -98,20 +133,62 @@ impl ModrinthApi {
                 let pack = &packs[idx];
                 let info = pack.modrinth_info.as_ref().unwrap();
 
+                if let Ok(json) = self.project_json(&info.slug).await {
+                    if !Self::is_compatible(&json) {
+                        continue;
+                    }
+                    return Ok(Modpack {
+                        slug: info.slug.clone(),
+                        title: json["title"].as_str().unwrap_or(&info.title).to_string(),
+                        author: Self::author_of(&json),
+                        versions: json["game_versions"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        categories: json["categories"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                        description: Some(pack.summary.clone()),
+                    });
+                }
+            }
+        }
+        bail!("no compatible modpack found on Modpack Index")
+    }
+
+    async fn random_from_search(&self) -> Result<Modpack> {
+        let facets = format!(
+            r#"[["project_type:modpack"],["versions:{}"],["categories:{}"]]"#,
+            REQUIRED_VERSION, REQUIRED_LOADER
+        );
+        for _ in 0..3 {
+            let offset = rand::thread_rng().gen_range(0..500);
+            let resp = self.client
+                .get("https://api.modrinth.com/v2/search")
+                .header("User-Agent", UA)
+                .query(&[("facets", &facets), ("limit", "100"), ("offset", &offset.to_string())])
+                .send().await?;
+
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                bail!("Modrinth search returned {}: {}", status, body.chars().take(200).collect::<String>());
+            }
+
+            let body = resp.text().await?;
+            let search: ModrinthSearch = serde_json::from_str(&body)?;
+
+            if !search.hits.is_empty() {
+                let hit = &search.hits[rand::thread_rng().gen_range(0..search.hits.len())];
                 return Ok(Modpack {
-                    slug: if !info.slug.is_empty() { info.slug.clone() } else { pack.slug.clone() },
-                    title: if !info.title.is_empty() { info.title.clone() } else { pack.name.clone() },
+                    slug: hit.slug.clone(),
+                    title: hit.title.clone(),
                     author: String::new(),
                     versions: vec![],
-                    categories: info.categories.clone(),
-                    description: Some(pack.summary.clone()),
+                    categories: hit.categories.clone(),
+                    description: hit.description.clone(),
                 });
             }
         }
-        self.random_from_fallback().await
-    }
-
-    async fn random_from_fallback(&self) -> Result<Modpack> {
         let slug = FALLBACK_MODPACKS[rand::thread_rng().gen_range(0..FALLBACK_MODPACKS.len())];
         self.modpack_by_slug(slug).await
     }
@@ -124,8 +201,6 @@ struct ModpackIndexResponse {
 
 #[derive(Deserialize)]
 struct ModpackIndexItem {
-    name: String,
-    slug: String,
     summary: String,
     modrinth_info: Option<ModrinthInfo>,
 }
@@ -136,6 +211,19 @@ struct ModrinthInfo {
     slug: String,
     #[serde(default)]
     title: String,
+}
+
+#[derive(Deserialize)]
+struct ModrinthSearch {
+    hits: Vec<ModrinthSearchHit>,
+}
+
+#[derive(Deserialize)]
+struct ModrinthSearchHit {
+    slug: String,
+    title: String,
+    #[serde(default)]
+    description: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
 }

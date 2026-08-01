@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ratatui = "0.26"
-crossterm = "0.27"
+eframe = "0.35.0"
 tokio = { version = "1.38", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -17,5 +16,4 @@ rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 open = "5.0"
 include_dir = "0.7"
-textwrap = "0.16"
 clap = { version = "4.4", features = ["derive"] }

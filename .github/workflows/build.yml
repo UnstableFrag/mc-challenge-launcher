@@ -99,23 +99,18 @@ jobs:
 
           echo "== VERIFIED: challenge-hud-${MC} (fabric + expected loaders) =="
 
-      # Fabric jar обязателен — если его нет, строка падает
-      - name: Upload mod jar (fabric)
-        uses: actions/upload-artifact@v4
-        with:
-          name: challenge-mod-${{ matrix.mc }}
-          path: challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}.jar
-          if-no-files-found: error
-
-      # Forge/NeoForge jar-ы — только если версия их поддерживает (missing files игнорируем)
-      - name: Upload mod jar (forge / neoforge, if built)
+      # Все jar-ы строки матрицы одним артефактом (fabric всегда; forge/neoforge по матрице
+      # поддержки версии). Один шаг = одно имя: upload-artifact@v4 падает с 409 при
+      # повторной заливке под тем же именем в одном workflow run.
+      - name: Upload mod jars
         uses: actions/upload-artifact@v4
         with:
           name: challenge-mod-${{ matrix.mc }}
           path: |
+            challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}.jar
             challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}-forge.jar
             challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}-neoforge.jar
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   build-launcher:
     name: Build Rust Launcher (Windows)

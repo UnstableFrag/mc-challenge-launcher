@@ -8,6 +8,8 @@ use std::io::Cursor;
 use std::fs;
 use std::process::Command;
 
+use crate::embed;
+
 pub struct Instance {
     pub path: PathBuf,
     pub mods_dir: PathBuf,
@@ -67,7 +69,7 @@ impl InstanceManager {
         anyhow::bail!("Instance not found for slug={} title={}", slug, title)
     }
 
-    pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client, preferred_version: Option<&str>) -> Result<Instance> {
+    pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client, preferred: Option<&embed::Target>) -> Result<Instance> {
         let version_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
         let versions = client
             .get(&version_url)
@@ -83,14 +85,34 @@ impl InstanceManager {
             }).collect())
             .unwrap_or_default();
 
-        // Сначала версии, поддерживающие нужную MC-версию
-        if let Some(pref) = preferred_version {
-            if let Some(pos) = candidates.iter().position(|ver| {
-                ver["game_versions"].as_array()
-                    .map(|gv| gv.iter().any(|v| v.as_str() == Some(pref)))
+        // Сначала версии, совпадающие с нужной MC-версией И загрузчиком модпака.
+        // Загрузчики не взаимозаменяемы: никогда не берём .mrpack другого загрузчика.
+        if let Some(pref) = preferred {
+            let matches_loader = |ver: &serde_json::Value| {
+                ver["loaders"].as_array()
+                    .map(|ls| ls.iter().any(|l| {
+                        l.as_str().map(|s| pref.loader.api_names().iter().any(|n| s.eq_ignore_ascii_case(n))).unwrap_or(false)
+                    }))
                     .unwrap_or(false)
-            }) {
+            };
+            let exact = candidates.iter().position(|ver| {
+                ver["game_versions"].as_array()
+                    .map(|gv| gv.iter().any(|v| v.as_str() == Some(pref.version.as_str())))
+                    .unwrap_or(false)
+                    && matches_loader(ver)
+            });
+            if let Some(pos) = exact {
                 candidates.swap(0, pos);
+            } else if let Some(pos) = candidates.iter().position(|ver| matches_loader(ver)) {
+                // Та же семья загрузчика, но MC-версия размечена иначе — берём её.
+                candidates.swap(0, pos);
+            } else {
+                anyhow::bail!(
+                    "No .mrpack release of {} tagged with loader {} (MC {}); refusing to mix loaders",
+                    slug,
+                    pref.loader.display_name(),
+                    pref.version
+                );
             }
         }
 

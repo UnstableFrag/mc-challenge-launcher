@@ -124,24 +124,30 @@ impl App {
         };
         self.current_pack = Some(pack.clone());
 
-        let target_version = match pack.pick_version() {
-            Some(v) => v,
+        let target = match pack.pick_target() {
+            Some(t) => t,
             None => {
                 self.push_log(&format!(
-                    "Unsupported MC versions: {} (supported: {})",
+                    "Unsupported: MC versions [{}], loaders [{}] — supported: {}",
                     pack.versions_str(),
-                    embed::SUPPORTED_VERSIONS.join(", ")
+                    pack.loaders_str(),
+                    embed::support_summary()
                 ));
                 self.reset();
                 return Ok(());
             }
         };
-        self.push_log(&format!("Target MC version: {}", target_version));
+        self.push_log(&format!(
+            "Target: MC {} / {} (jar: {})",
+            target.version,
+            target.loader.display_name(),
+            embed::jar_name(&target)
+        ));
 
         if self.modpack_slug.is_some() {
             self.state = AppState::Injecting;
             self.push_log("Downloading & extracting .mrpack...");
-            let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client(), Some(&target_version)).await {
+            let instance = match self.instance_mgr.create_instance_from_modpack(&pack.slug, self.api.client(), Some(&target)).await {
                 Ok(inst) => inst,
                 Err(e) => {
                     self.push_log(&format!("Download failed: {}", e));
@@ -150,7 +156,7 @@ impl App {
                 }
             };
             self.push_log(&format!("Instance: {}", instance.path.display()));
-            self.inject_mod(&instance, &target_version).await?;
+            self.inject_mod(&instance, &target).await?;
         } else {
             self.state = AppState::OpeningModrinth;
             self.push_log("Opening in Modrinth App...");
@@ -172,22 +178,27 @@ impl App {
                 }
             };
             self.push_log(&format!("Instance: {}", instance.path.display()));
-            self.inject_mod(&instance, &target_version).await?;
+            self.inject_mod(&instance, &target).await?;
         }
         self.state = AppState::Done;
         self.push_log("Done! Launch Minecraft to start the challenge");
         Ok(())
     }
 
-    async fn inject_mod(&mut self, instance: &instance::Instance, version: &str) -> Result<()> {
-        let jar_name = embed::jar_name(version);
+    async fn inject_mod(&mut self, instance: &instance::Instance, target: &embed::Target) -> Result<()> {
+        let jar_name = embed::jar_name(target);
         let file = embed::MOD_JAR_DIR
             .get_file(&jar_name)
             .ok_or_else(|| anyhow::anyhow!("embedded mod jar missing in binary: {}", jar_name))?;
         let dest = instance.mods_dir.join(jar_name);
         std::fs::create_dir_all(&instance.mods_dir)?;
         std::fs::write(&dest, file.contents())?;
-        self.push_log(&format!("Injected {}", dest.display()));
+        self.push_log(&format!(
+            "Injected {} (MC {}, {})",
+            dest.display(),
+            target.version,
+            target.loader.display_name()
+        ));
         Ok(())
     }
 
@@ -243,6 +254,9 @@ impl App {
             if !pack.versions.is_empty() {
                 lines.push(Line::from(vec![Span::styled("🎮 ", Style::default().fg(Color::Magenta)), Span::raw(pack.versions_str())]));
             }
+            if let Some(loader) = pack.primary_loader() {
+                lines.push(Line::from(vec![Span::styled("🔧 ", Style::default().fg(Color::Cyan)), Span::raw(loader.display_name())]));
+            }
             if !pack.categories.is_empty() {
                 lines.push(Line::from(vec![Span::styled("🏷️ ", Style::default().fg(Color::Green)), Span::raw(pack.categories.join(", "))]));
             }
@@ -256,6 +270,7 @@ impl App {
             }
         } else {
             lines.push(Line::from("Press [R] to roll a random modpack"));
+            lines.push(Line::from(format!("Supported: {}", embed::support_summary())));
         }
         f.render_widget(
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })

@@ -34,18 +34,88 @@ jobs:
         working-directory: ./challenge-mod
         run: gradle build -Pmc=${{ matrix.mc }} --no-daemon
 
-      - name: Verify jar exists
+      # Контракт jar-ов на строку матрицы:
+      #   challenge-hud-<mc>.jar          — Fabric, всегда
+      #   challenge-hud-<mc>-forge.jar    — только 1.20.1, 1.20.2, 1.20.4
+      #   challenge-hud-<mc>-neoforge.jar — все, кроме 1.20.1
+      # Проверяем не только наличие файла, но и что в нём есть классы мода
+      # (защита от пустых/битых jar — такая проблема в этом репо уже была).
+      - name: Verify jars contain the mod classes
         shell: bash
         run: |
-          ls challenge-mod/build/libs/ || true
-          test -f challenge-mod/build/libs/challenge-hud-${{ matrix.mc }}.jar && echo "OK" || echo "MISSING"
+          set -euo pipefail
+          MC=${{ matrix.mc }}
 
-      - name: Upload mod jar
+          # Матрица поддержки лоадеров
+          FORGE_EXPECTED=0; NEOFORGE_EXPECTED=0
+          case "$MC" in
+            1.20.1)          FORGE_EXPECTED=1; NEOFORGE_EXPECTED=0 ;;
+            1.20.2|1.20.4)   FORGE_EXPECTED=1; NEOFORGE_EXPECTED=1 ;;
+            *)               FORGE_EXPECTED=0; NEOFORGE_EXPECTED=1 ;;
+          esac
+
+          find_jar() {
+            local name="$1"
+            find challenge-mod -type f -path "*/build/libs/$name" -print -quit
+          }
+
+          check_jar() {
+            local jar="$1"; shift
+            [ -f "$jar" ] || { echo "::error::Expected jar missing: $jar"; exit 1; }
+            local cls
+            for cls in "$@"; do
+              if unzip -l "$jar" | grep -q "$cls"; then
+                echo "OK: $(basename "$jar") contains $cls"
+              else
+                echo "::error::$(basename "$jar") does not contain $cls (empty/broken jar?)"
+                exit 1
+              fi
+            done
+          }
+
+          echo "== Produced jars =="
+          find challenge-mod -type f -path '*/build/libs/challenge-hud-*.jar'
+          echo "==================="
+
+          # Fabric — всегда (common класс + fabric entrypoint)
+          FABRIC=$(find_jar "challenge-hud-${MC}.jar")
+          check_jar "$FABRIC" "challengehud/ChallengeHud\.class" "ChallengeHudFabric\.class"
+
+          # Forge — только 1.20.1/1.20.2/1.20.4
+          FORGE=$(find_jar "challenge-hud-${MC}-forge.jar")
+          if [ "$FORGE_EXPECTED" = "1" ]; then
+            check_jar "$FORGE" "challengehud/ChallengeHud\.class" "ChallengeHudForge\.class"
+          elif [ -n "$FORGE" ]; then
+            echo "WARN: unexpected forge jar produced for $MC: $FORGE"
+          fi
+
+          # NeoForge — все, кроме 1.20.1
+          NEOFORGE=$(find_jar "challenge-hud-${MC}-neoforge.jar")
+          if [ "$NEOFORGE_EXPECTED" = "1" ]; then
+            check_jar "$NEOFORGE" "challengehud/ChallengeHud\.class" "ChallengeHudNeoForge\.class"
+          elif [ -n "$NEOFORGE" ]; then
+            echo "WARN: unexpected neoforge jar produced for $MC: $NEOFORGE"
+          fi
+
+          echo "== VERIFIED: challenge-hud-${MC} (fabric + expected loaders) =="
+
+      # Fabric jar обязателен — если его нет, строка падает
+      - name: Upload mod jar (fabric)
         uses: actions/upload-artifact@v4
         with:
           name: challenge-mod-${{ matrix.mc }}
-          path: challenge-mod/build/libs/challenge-hud-${{ matrix.mc }}.jar
+          path: challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}.jar
           if-no-files-found: error
+
+      # Forge/NeoForge jar-ы — только если версия их поддерживает (missing files игнорируем)
+      - name: Upload mod jar (forge / neoforge, if built)
+        uses: actions/upload-artifact@v4
+        with:
+          name: challenge-mod-${{ matrix.mc }}
+          path: |
+            challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}-forge.jar
+            challenge-mod/**/build/libs/challenge-hud-${{ matrix.mc }}-neoforge.jar
+          if-no-files-found: ignore
 
   build-launcher:
     name: Build Rust Launcher (Windows)
@@ -71,6 +141,67 @@ jobs:
             Copy-Item -Path $jar.FullName -Destination "assets/challenge-mod/$($jar.Name)" -Force
           }
           Get-ChildItem assets/challenge-mod | Select-Object Name, Length
+
+      # embed.rs инжектит все 34 jar-а в .exe (include_bytes); отсутствующий файл
+      # ломает билд Rust, поэтому проверяем полный манифест ДО cargo build.
+      - name: Assert all 34 expected jars are present
+        shell: pwsh
+        run: |
+          $expected = @(
+            # Fabric (16)
+            'challenge-hud-1.20.1.jar',
+            'challenge-hud-1.20.2.jar',
+            'challenge-hud-1.20.4.jar',
+            'challenge-hud-1.20.6.jar',
+            'challenge-hud-1.21.jar',
+            'challenge-hud-1.21.1.jar',
+            'challenge-hud-1.21.2.jar',
+            'challenge-hud-1.21.3.jar',
+            'challenge-hud-1.21.4.jar',
+            'challenge-hud-1.21.5.jar',
+            'challenge-hud-1.21.6.jar',
+            'challenge-hud-1.21.7.jar',
+            'challenge-hud-1.21.8.jar',
+            'challenge-hud-1.21.9.jar',
+            'challenge-hud-1.21.10.jar',
+            'challenge-hud-1.21.11.jar',
+            # Forge (3)
+            'challenge-hud-1.20.1-forge.jar',
+            'challenge-hud-1.20.2-forge.jar',
+            'challenge-hud-1.20.4-forge.jar',
+            # NeoForge (15)
+            'challenge-hud-1.20.2-neoforge.jar',
+            'challenge-hud-1.20.4-neoforge.jar',
+            'challenge-hud-1.20.6-neoforge.jar',
+            'challenge-hud-1.21-neoforge.jar',
+            'challenge-hud-1.21.1-neoforge.jar',
+            'challenge-hud-1.21.2-neoforge.jar',
+            'challenge-hud-1.21.3-neoforge.jar',
+            'challenge-hud-1.21.4-neoforge.jar',
+            'challenge-hud-1.21.5-neoforge.jar',
+            'challenge-hud-1.21.6-neoforge.jar',
+            'challenge-hud-1.21.7-neoforge.jar',
+            'challenge-hud-1.21.8-neoforge.jar',
+            'challenge-hud-1.21.9-neoforge.jar',
+            'challenge-hud-1.21.10-neoforge.jar',
+            'challenge-hud-1.21.11-neoforge.jar'
+          )
+          if ($expected.Count -ne 34) {
+            Write-Host "::error::Manifest count is $($expected.Count), expected 34"
+            exit 1
+          }
+          $missing = @($expected | Where-Object { -not (Test-Path -LiteralPath (Join-Path 'assets/challenge-mod' $_)) })
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Missing $($missing.Count) of $($expected.Count) expected jars: $($missing -join ', ')"
+            exit 1
+          }
+          $actual = @(Get-ChildItem -LiteralPath 'assets/challenge-mod' -Filter 'challenge-hud-*.jar' -File)
+          if ($actual.Count -ne $expected.Count) {
+            $names = ($actual | Select-Object -ExpandProperty Name) -join ', '
+            Write-Host "::error::Expected exactly $($expected.Count) jars in assets/challenge-mod, found $($actual.Count): $names"
+            exit 1
+          }
+          Write-Host "== All $($expected.Count) expected jars present in assets/challenge-mod =="
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

@@ -10,7 +10,7 @@
   "icon": "assets/challengehud/icon.png",
   "environment": "client",
   "entrypoints": {
-    "client": ["com.github.mcchallenge.challengehud.ChallengeHud"]
+    "client": ["com.github.mcchallenge.challengehud.fabric.ChallengeHudFabric"]
   },
   "mixins": [],
   "depends": {

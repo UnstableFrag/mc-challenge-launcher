@@ -3,7 +3,7 @@ use rand::Rng;
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::embed::SUPPORTED_VERSIONS;
+use crate::embed::{self, Loader, Target};
 
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
 
@@ -13,21 +13,36 @@ pub struct Modpack {
     pub title: String,
     pub author: String,
     pub versions: Vec<String>,
+    pub loaders: Vec<String>,
     pub categories: Vec<String>,
     pub description: Option<String>,
 }
 
 impl Modpack {
-    /// Лучшая поддерживаемая версия модпака (максимум покрытия) или None
-    pub fn pick_version(&self) -> Option<String> {
-        SUPPORTED_VERSIONS.iter()
-            .filter(|v| self.versions.iter().any(|pv| pv == *v))
+    /// Основной загрузчик модпака (первый из fabric/quilt/forge/neoforge) или None.
+    pub fn primary_loader(&self) -> Option<Loader> {
+        embed::primary_loader(&self.loaders)
+    }
+
+    /// Лучшая поддерживаемая пара (MC-версия, загрузчик) или None.
+    pub fn pick_target(&self) -> Option<Target> {
+        let loader = self.primary_loader()?;
+        self.versions.iter()
+            .filter(|pv| embed::is_supported(pv, loader))
             .max_by(|a, b| version_cmp(a, b))
-            .map(|s| s.to_string())
+            .map(|v| Target { version: v.clone(), loader })
     }
 
     pub fn versions_str(&self) -> String {
         self.versions.join(", ")
+    }
+
+    pub fn loaders_str(&self) -> String {
+        if self.loaders.is_empty() {
+            "<none>".to_string()
+        } else {
+            self.loaders.join(", ")
+        }
     }
 }
 
@@ -94,9 +109,19 @@ impl ModrinthApi {
         Ok(resp.json::<serde_json::Value>().await?)
     }
 
-    fn has_supported_version(json: &serde_json::Value) -> bool {
+    fn loaders_from_json(json: &serde_json::Value) -> Vec<String> {
+        json["loaders"].as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    }
+
+    /// Есть ли встроенный jar для (версия, основной загрузчик) модпака.
+    fn has_supported_target(json: &serde_json::Value) -> bool {
+        let Some(loader) = embed::primary_loader(&Self::loaders_from_json(json)) else {
+            return false;
+        };
         json["game_versions"].as_array()
-            .map(|a| a.iter().any(|v| SUPPORTED_VERSIONS.contains(&v.as_str().unwrap_or(""))))
+            .map(|a| a.iter().any(|v| embed::is_supported(v.as_str().unwrap_or(""), loader)))
             .unwrap_or(false)
     }
 
@@ -117,6 +142,7 @@ impl ModrinthApi {
             versions: json["game_versions"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
+            loaders: Self::loaders_from_json(&json),
             categories: json["categories"].as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default(),
@@ -157,7 +183,7 @@ impl ModrinthApi {
                 let info = pack.modrinth_info.as_ref().unwrap();
 
                 if let Ok(json) = self.project_json(&info.slug).await {
-                    if !Self::has_supported_version(&json) {
+                    if !Self::has_supported_target(&json) {
                         continue;
                     }
                     return Ok(Modpack {
@@ -167,6 +193,7 @@ impl ModrinthApi {
                         versions: json["game_versions"].as_array()
                             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                             .unwrap_or_default(),
+                        loaders: Self::loaders_from_json(&json),
                         categories: json["categories"].as_array()
                             .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                             .unwrap_or_default(),
@@ -202,7 +229,14 @@ impl ModrinthApi {
             if !search.hits.is_empty() {
                 let hit = &search.hits[rand::thread_rng().gen_range(0..search.hits.len())];
                 if let Ok(json) = self.project_json(&hit.slug).await {
-                    if Self::has_supported_version(&json) {
+                    if Self::has_supported_target(&json) {
+                        // Приоритет — loaders из поискового хита (свежее),
+                        // иначе из project JSON.
+                        let loaders = if hit.loaders.is_empty() {
+                            Self::loaders_from_json(&json)
+                        } else {
+                            hit.loaders.clone()
+                        };
                         return Ok(Modpack {
                             slug: hit.slug.clone(),
                             title: hit.title.clone(),
@@ -210,6 +244,7 @@ impl ModrinthApi {
                             versions: json["game_versions"].as_array()
                                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                                 .unwrap_or_default(),
+                            loaders,
                             categories: hit.categories.clone(),
                             description: hit.description.clone(),
                         });
@@ -220,7 +255,7 @@ impl ModrinthApi {
         for _ in 0..10 {
             let slug = FALLBACK_MODPACKS[rand::thread_rng().gen_range(0..FALLBACK_MODPACKS.len())];
             if let Ok(pack) = self.modpack_by_slug(slug).await {
-                if pack.pick_version().is_some() {
+                if pack.pick_target().is_some() {
                     return Ok(pack);
                 }
             }
@@ -261,4 +296,6 @@ struct ModrinthSearchHit {
     description: Option<String>,
     #[serde(default)]
     categories: Vec<String>,
+    #[serde(default)]
+    loaders: Vec<String>,
 }

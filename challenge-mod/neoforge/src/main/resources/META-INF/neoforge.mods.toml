@@ -1,0 +1,27 @@
+modLoader="javafml"
+loaderVersion="[1,)"
+license="MIT"
+
+[[mods]]
+modId="challengehud"
+version="1.0.0"
+displayName="Challenge HUD"
+description="Universal in-game HUD challenge mod — works with any modpack on NeoForge via Architectury"
+logoFile="assets/challengehud/icon.png"
+credits="mcchallenge"
+authors="mcchallenge"
+
+[[dependencies.challengehud]]
+modId="neoforge"
+versionRange="[${neoVersion},)"
+mandatory=true
+
+[[dependencies.challengehud]]
+modId="minecraft"
+versionRange="[${mcVersion}]"
+mandatory=true
+
+[[dependencies.challengehud]]
+modId="architectury"
+versionRange=">=${archVersion}"
+mandatory=true

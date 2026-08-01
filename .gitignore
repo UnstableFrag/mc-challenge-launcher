@@ -2,5 +2,9 @@
 assets/challenge-mod/
 assets/challenge-mod.jar
 
-assets/challenge-mod/
-assets/challenge-mod.jar
+# Gradle: кэши и выводы сборки (на любой глубине)
+.gradle/
+.kotlin/
+build/
+
+target/

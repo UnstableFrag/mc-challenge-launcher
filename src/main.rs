@@ -30,7 +30,6 @@ const CARD_FILL: Color32 = Color32::from_rgb(30, 33, 40);
 const CARD_STROKE: Color32 = Color32::from_rgb(58, 63, 74);
 const PANEL_FILL: Color32 = Color32::from_rgb(26, 29, 35);
 const PANEL_STROKE: Color32 = Color32::from_rgb(52, 57, 67);
-const MUTED_TEXT: Color32 = Color32::from_gray(180);
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -70,7 +69,7 @@ impl AppState {
 
     fn badge_color(self) -> Color32 {
         match self {
-            AppState::Idle => Color32::from_rgb(140, 150, 160),
+            AppState::Idle => Color32::from_rgb(99, 106, 118),
             AppState::Searching => Color32::from_rgb(235, 185, 70),
             AppState::OpeningModrinth => Color32::from_rgb(235, 150, 70),
             AppState::Injecting => Color32::from_rgb(170, 140, 255),
@@ -86,6 +85,16 @@ impl AppState {
             AppState::OpeningModrinth => "OPENING IN MODRINTH APP...",
             AppState::Injecting => "INJECTING...",
             AppState::Done => "Done! Launch Minecraft to start the challenge",
+        }
+    }
+
+    /// Current step label shown under the indeterminate progress bar.
+    fn step_hint(self) -> &'static str {
+        match self {
+            AppState::Searching => "Searching for a random modpack",
+            AppState::OpeningModrinth => "Waiting for the modpack to install",
+            AppState::Injecting => "Copying the challenge mod into the instance",
+            AppState::Idle | AppState::Done => "",
         }
     }
 
@@ -153,7 +162,8 @@ struct App {
     current_pack: Option<Modpack>,
     /// Increments on every new pack so entrance animations replay per roll.
     pack_seq: u64,
-    log_lines: Vec<String>,
+    /// (timestamp, message) log lines.
+    log_lines: Vec<(String, String)>,
     modpack_slug: Option<String>,
     tx: mpsc::UnboundedSender<UiMsg>,
     rx: mpsc::UnboundedReceiver<UiMsg>,
@@ -168,7 +178,10 @@ impl App {
             busy: false,
             current_pack: None,
             pack_seq: 0,
-            log_lines: vec!["mc-challenge-launcher ready".to_owned()],
+            log_lines: {
+                let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+                vec![(ts, "mc-challenge-launcher ready".to_owned())]
+            },
             modpack_slug,
             tx,
             rx,
@@ -177,8 +190,8 @@ impl App {
     }
 
     fn push_log(&mut self, msg: &str) {
-        let ts = chrono::Local::now().format("%H:%M:%S");
-        self.log_lines.push(format!("[{}] {}", ts, msg));
+        let ts = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.log_lines.push((ts, msg.to_owned()));
         if self.log_lines.len() > 100 {
             self.log_lines.remove(0);
         }
@@ -272,14 +285,15 @@ impl App {
     // -- top bar ------------------------------------------------------------
 
     fn state_badge(&self, ui: &mut egui::Ui) {
-        let color = self.state.badge_color();
+        let fill = self.state.badge_color();
+        let fg = fg_on(fill);
         egui::Frame::new()
-            .fill(color.gamma_multiply(0.16))
-            .stroke(Stroke::new(1.0, color.gamma_multiply(0.9)))
+            .fill(fill)
+            .stroke(Stroke::new(1.0, fill.gamma_multiply(0.7)))
             .corner_radius(10)
             .inner_margin(Margin::symmetric(8, 3))
             .show(ui, |ui| {
-                ui.label(RichText::new(self.state.badge_text()).color(color).strong().small());
+                ui.label(RichText::new(self.state.badge_text()).color(fg).strong().small());
             });
     }
 
@@ -312,13 +326,17 @@ impl App {
                 .show(ui, |ui| {
                     ui.add_space(6.0);
                     ui.label(RichText::new("Press [R] to roll a random modpack").strong().size(16.0));
-                    ui.label(RichText::new("or click Roll").weak().small());
+                    ui.label(
+                        RichText::new("or click Roll")
+                            .color(weak_text(ui, CARD_FILL))
+                            .small(),
+                    );
                     ui.add_space(12.0);
                     ui.separator();
                     ui.add_space(8.0);
                     ui.label(
                         RichText::new(format!("Supported: {}", embed::support_summary()))
-                            .weak()
+                            .color(weak_text(ui, CARD_FILL))
                             .small(),
                     );
                 });
@@ -329,7 +347,11 @@ impl App {
         ui.label(RichText::new(&pack.title).strong().size(20.0).color(ACCENT));
         if !pack.author.is_empty() {
             ui.add_space(2.0);
-            ui.label(RichText::new(format!("by {}", pack.author)).weak().small());
+            ui.label(
+                RichText::new(format!("by {}", pack.author))
+                    .color(weak_text(ui, CARD_FILL))
+                    .small(),
+            );
         }
         ui.add_space(8.0);
         if !pack.versions.is_empty() {
@@ -376,25 +398,17 @@ impl App {
                             .color(self.state.badge_color()),
                     );
                     ui.add_space(12.0);
-                    let phase = (ui.ctx().input(|i| i.time) as f32 * 0.6).fract();
-                    ui.add(
-                        egui::ProgressBar::new(phase)
-                            .animate(true)
-                            .fill(ACCENT)
-                            .desired_width(ui.available_width().min(320.0)),
-                    );
-                    ui.add_space(8.0);
-                    shimmer_strip(ui);
+                    progress_indeterminate(ui, ACCENT, self.state.step_hint());
                 } else {
                     match self.state {
                         AppState::Idle => {
-                            ui.label(
-                                RichText::new("Ready")
-                                    .strong()
-                                    .color(Color32::from_rgb(140, 150, 160)),
-                            );
+                            ui.label(RichText::new("Ready").strong());
                             ui.add_space(4.0);
-                            ui.label(RichText::new("Press [R] to roll a random modpack").weak().small());
+                            ui.label(
+                                RichText::new("Press [R] to roll a random modpack")
+                                    .color(weak_text(ui, PANEL_FILL))
+                                    .small(),
+                            );
                         }
                         AppState::Done => {
                             let (rect, _) =
@@ -407,7 +421,7 @@ impl App {
                                 RichText::new(
                                     "Challenge mod injected.\nLaunch Minecraft to play.\nThe mod picks a random target!",
                                 )
-                                .weak()
+                                .color(weak_text(ui, PANEL_FILL))
                                 .small(),
                             );
                         }
@@ -422,16 +436,16 @@ impl App {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let can_roll = !self.busy && matches!(self.state, AppState::Idle | AppState::Done);
-                    if ui.add_enabled(can_roll, egui::Button::new("🎲 Roll")).clicked() {
+                    if ui.add_enabled(can_roll, egui::Button::new("Roll")).clicked() {
                         self.start_roll();
                     }
                     let can_clean =
                         !self.busy && matches!(self.state, AppState::Done) && self.current_pack.is_some();
-                    if ui.add_enabled(can_clean, egui::Button::new("🧹 Cleanup")).clicked() {
+                    if ui.add_enabled(can_clean, egui::Button::new("Cleanup")).clicked() {
                         self.start_cleanup();
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("✕ Quit").clicked() {
+                        if ui.small_button("Quit").clicked() {
                             self.quit(&ctx);
                         }
                     });
@@ -466,7 +480,11 @@ impl eframe::App for App {
                     ui.add_space(10.0);
                     self.state_badge(ui);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new("Random modpack challenge launcher").weak().small());
+                        ui.label(
+                            RichText::new("Random modpack challenge launcher")
+                                .color(weak_text(ui, WINDOW_FILL))
+                                .small(),
+                        );
                     });
                 });
                 ui.add_space(6.0);
@@ -502,7 +520,11 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Log").strong());
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new(self.help_hint()).weak().small());
+                        ui.label(
+                            RichText::new(self.help_hint())
+                                .color(weak_text(ui, WINDOW_FILL))
+                                .small(),
+                        );
                     });
                 });
                 ui.add_space(2.0);
@@ -513,8 +535,15 @@ impl eframe::App for App {
                         .auto_shrink([false, false])
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
-                            for line in &self.log_lines {
-                                ui.monospace(RichText::new(line.as_str()).color(MUTED_TEXT));
+                            for (ts, msg) in &self.log_lines {
+                                ui.horizontal(|ui| {
+                                    ui.monospace(
+                                        RichText::new(format!("[{}]", ts))
+                                            .color(weak_text(ui, WINDOW_FILL)),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.monospace(RichText::new(msg).color(ui.visuals().text_color()));
+                                });
                             }
                         });
                 });
@@ -710,36 +739,105 @@ fn chip(ui: &mut egui::Ui, label: &str) {
         });
 }
 
-/// Thin animated shimmer strip below the progress bar.
-fn shimmer_strip(ui: &mut egui::Ui) {
-    let time = ui.ctx().input(|i| i.time) as f32;
+/// Indeterminate progress bar: a rounded track with a smooth segment that
+/// sweeps left-to-right and is fully contained within its allocated rect.
+/// An optional hint label is drawn underneath.
+fn progress_indeterminate(ui: &mut egui::Ui, color: Color32, hint: &str) {
     let width = ui.available_width().min(320.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
+    let bar_h = 8.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, bar_h), egui::Sense::hover());
     let painter = ui.painter();
-    let radius = egui::CornerRadius::same(3);
-    painter.rect_filled(rect, radius, Color32::from_gray(42));
+    let radius = bar_h * 0.5;
 
-    let hl_w = width * 0.30;
-    let span = width + hl_w;
-    let x = rect.left() + (time * 0.55).fract() * span - hl_w;
-    let top = rect.top();
-    let h = rect.height();
-    painter.rect_filled(
-        egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(hl_w, h)),
+    // Track (pill) + subtle inner border for definition on the panel.
+    painter.rect_filled(rect, radius, Color32::from_gray(42));
+    painter.rect_stroke(
+        rect.shrink(0.5),
         radius,
-        ACCENT,
+        Stroke::new(1.0, Color32::from_gray(60)),
+        egui::StrokeKind::Inside,
     );
-    let edge_w = hl_w * 0.25;
-    painter.rect_filled(
-        egui::Rect::from_min_size(egui::pos2(x - edge_w, top), egui::vec2(edge_w, h)),
-        radius,
-        ACCENT.gamma_multiply(0.30),
-    );
-    painter.rect_filled(
-        egui::Rect::from_min_size(egui::pos2(x + hl_w, top), egui::vec2(edge_w, h)),
-        radius,
-        ACCENT.gamma_multiply(0.30),
-    );
+
+    // Sweeping segment: eased left->right loop. The position is bounded by
+    // construction (x in [left, right - seg_w]) and additionally clipped, so
+    // nothing ever overflows the track.
+    let seg_w = width * 0.32;
+    let t = (ui.ctx().input(|i| i.time) as f32 * 0.55).fract();
+    let eased = smoothstep(t);
+    let x = rect.left() + eased * (rect.width() - seg_w);
+    let seg = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(seg_w, bar_h));
+    let clip = painter.with_clip_rect(rect);
+    clip.rect_filled(seg.expand(2.5), radius + 2.5, color.gamma_multiply(0.18));
+    clip.rect_filled(seg, radius, color);
+    drop(clip);
+
+    if !hint.is_empty() {
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(hint)
+                .color(weak_text(ui, PANEL_FILL))
+                .small(),
+        );
+    }
+}
+
+/// Ease-in-out used by the progress segment so the sweep accelerates and
+/// decelerates (velocity is zero at both ends, making the loop seamless).
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+// -- contrast helpers -------------------------------------------------------
+
+/// WCAG relative luminance of a color.
+fn luminance(c: Color32) -> f32 {
+    fn lin(v: u8) -> f32 {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+}
+
+/// WCAG contrast ratio between two colors.
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Brightest gray that reaches `ratio:1` against `bg`.
+fn gray_with_contrast(bg: Color32, ratio: f32) -> Color32 {
+    let lb = luminance(bg);
+    let lt = (ratio * (lb + 0.05) - 0.05).max(0.0);
+    let v = (1.055 * lt.powf(1.0 / 2.4) - 0.055).clamp(0.0, 1.0);
+    Color32::from_gray((v * 255.0).round() as u8)
+}
+
+/// Weak/secondary text color from the current theme, lifted until it clears
+/// WCAG AA (4.5:1) on `bg`. egui's default dark weak gray (~120) sinks into
+/// this app's custom fills, so we brighten it only as much as needed.
+fn weak_text(ui: &egui::Ui, bg: Color32) -> Color32 {
+    let theme = ui.visuals().weak_text_color();
+    if contrast(theme, bg) >= 4.5 {
+        theme
+    } else {
+        gray_with_contrast(bg, 4.5)
+    }
+}
+
+/// Foreground for text sitting on a colored fill: near-black for light fills,
+/// near-white for dark fills, chosen by luminance.
+fn fg_on(fill: Color32) -> Color32 {
+    if luminance(fill) > 0.18 {
+        Color32::from_gray(18)
+    } else {
+        Color32::from_gray(246)
+    }
 }
 
 /// Green pulse + animated checkmark on the Done state.

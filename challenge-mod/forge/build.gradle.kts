@@ -24,8 +24,14 @@ if (Versions.isForgeSupported(mc)) {
         add("mappings", mojmap)
         compileOnly(project(":common"))
         add("forge", "net.minecraftforge:forge:${mc}-${info.forge}")
-        add("modImplementation", "dev.architectury:architectury-forge:${info.architectury}")
-        add("include", "dev.architectury:architectury-forge:${info.architectury}")
+        if (mc == "1.16.5") {
+            // architectury 1.x has no maven artifact; resolved from vendor/m2.
+            add("modImplementation", "dev.architectury:architectury-forge:1.32.68")
+            add("include", "dev.architectury:architectury-forge:1.32.68")
+        } else {
+            add("modImplementation", "dev.architectury:architectury-forge:${info.architectury}")
+            add("include", "dev.architectury:architectury-forge:${info.architectury}")
+        }
     }
 
     base {
@@ -43,6 +49,9 @@ if (Versions.isForgeSupported(mc)) {
     }
 
     tasks.processResources {
+        // mc is a project property, not a task input by default: without this the task would
+        // be UP-TO-DATE across -Pmc runs and bake stale metadata into the jars.
+        inputs.property("mcVersion", mc)
         filesMatching("META-INF/mods.toml") {
             expand(
                 "mcVersion" to mc,

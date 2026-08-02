@@ -20,7 +20,15 @@ dependencies {
     "minecraft"("com.mojang:minecraft:${mc}")
     "mappings"(mojmap)
     modImplementation("net.fabricmc:fabric-loader:0.16.14")
-    modCompileOnly("dev.architectury:architectury:${info.architectury}")
+    if (mc == "1.16.5") {
+        // architectury 1.x has no maven artifact (packages me.shedaniel.*); use the vendored jar.
+        modCompileOnly(files(rootProject.file("vendor/architectury-1.32.68-fabric.jar")))
+        // slf4j is not exposed on the loom compile classpath for 1.16.5 (it ships at runtime
+        // via log4j-slf4j18-impl in the game libs, so compileOnly is sufficient).
+        compileOnly("org.slf4j:slf4j-api:1.8.0-beta4")
+    } else {
+        modCompileOnly("dev.architectury:architectury:${info.architectury}")
+    }
 }
 
 sourceSets {

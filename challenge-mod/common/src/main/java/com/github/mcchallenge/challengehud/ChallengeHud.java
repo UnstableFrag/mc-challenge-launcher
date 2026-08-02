@@ -3,12 +3,7 @@ package com.github.mcchallenge.challengehud;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
-import dev.architectury.event.events.client.ClientGuiEvent;
-import dev.architectury.event.events.client.ClientTickEvent;
-import dev.architectury.platform.Platform;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -23,6 +18,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+/**
+ * Core challenge logic. Era-agnostic (no rendering, no architectury, no 1.20-only APIs)
+ * so it compiles at Java 8 for MC 1.16.5. All version-specific work happens in the
+ * per-era {@link EraBridge} class.
+ */
 public class ChallengeHud {
     public static final String MOD_ID = "challengehud";
     private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
@@ -31,31 +31,30 @@ public class ChallengeHud {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final Random RNG = new Random();
 
-    private static Minecraft client = Minecraft.getInstance();
-    private static ItemStack targetStack = ItemStack.EMPTY;
-    private static long deadlineTicks = 0;
-    private static boolean active = false;
-    private static boolean completed = false;
-    private static Instant startTime;
-    private static String playerName = "";
-    private static ChallengeType challengeType = ChallengeType.ITEM;
+    // Package-private static state read by the per-era EraBridge (HUD rendering).
+    static Minecraft client = Minecraft.getInstance();
+    static ItemStack targetStack = ItemStack.EMPTY;
+    static long deadlineTicks = 0;
+    static boolean active = false;
+    static boolean completed = false;
+    static Instant startTime;
+    static String playerName = "";
+    static ChallengeType challengeType = ChallengeType.ITEM;
 
     enum ChallengeType { ITEM, MOB_KILL, EXPLORE }
 
     /** Called from the platform entrypoints (fabric/forge/neoforge) on client setup. */
     public static void init() {
-        ClientTickEvent.CLIENT_POST.register(ChallengeHud::tick);
-        ClientGuiEvent.RENDER_HUD.register((graphics, delta) -> render(graphics));
+        EraBridge.registerEvents();
         loadConfig();
         LOGGER.info("Challenge HUD loaded");
     }
 
     private static void pickRandomTarget() {
         List<Item> candidates = new ArrayList<>();
-        for (Item item : BuiltInRegistries.ITEM.stream().toList()) {
+        for (Item item : EraBridge.items()) {
             if (item == Items.AIR) continue;
-            var id = BuiltInRegistries.ITEM.getKey(item);
-            String path = id.getPath();
+            String path = EraBridge.itemPath(item);
             if (path.contains("spawn_egg")) continue;
             if (path.contains("command_block")) continue;
             if (path.contains("barrier")) continue;
@@ -71,12 +70,12 @@ public class ChallengeHud {
         } else {
             Item picked = candidates.get(RNG.nextInt(candidates.size()));
             targetStack = new ItemStack(picked);
-            LOGGER.info("Random target: {} ({})", BuiltInRegistries.ITEM.getKey(picked),
+            LOGGER.info("Random target: {} ({})", EraBridge.itemId(picked),
                 new ItemStack(picked).getHoverName().getString());
         }
     }
 
-    private static void tick(Minecraft client) {
+    static void tick(Minecraft client) {
         if (client.player == null || !active || completed) return;
 
         if (deadlineTicks > 0 && client.level.getGameTime() >= deadlineTicks) {
@@ -85,13 +84,14 @@ public class ChallengeHud {
         }
 
         switch (challengeType) {
-            case ITEM -> {
-                if (client.player.getInventory().countItem(targetStack.getItem()) > 0) {
+            case ITEM:
+                if (EraBridge.countItem(client, targetStack.getItem()) > 0) {
                     complete(client);
                 }
-            }
-            case MOB_KILL -> {}
-            case EXPLORE -> {}
+                break;
+            case MOB_KILL:
+            case EXPLORE:
+                break;
         }
     }
 
@@ -101,64 +101,6 @@ public class ChallengeHud {
         active = false;
         client.execute(() -> client.setScreen(new TimeoutScreen()));
         LOGGER.info("Challenge timed out!");
-    }
-
-    private static void render(GuiGraphics graphics) {
-        if (client == null || client.player == null || !active || targetStack.isEmpty()) return;
-
-        int width = client.getWindow().getGuiScaledWidth();
-        int height = client.getWindow().getGuiScaledHeight();
-
-        int panelX = width - 240;
-        int panelY = 40;
-        int panelW = 220;
-        int panelH = 180;
-
-        graphics.fillGradient(panelX, panelY, panelX + panelW, panelY + panelH,
-            0x99000000, 0xCC111111);
-        // 1px border via fills — renderOutline was renamed submitOutline in 1.21.9/1.21.10
-        int bx = panelX, by = panelY, bw = panelW, bh = panelH;
-        graphics.fill(bx, by, bx + bw, by + 1, 0xFF89B4FA);
-        graphics.fill(bx, by + bh - 1, bx + bw, by + bh, 0xFF89B4FA);
-        graphics.fill(bx, by, bx + 1, by + bh, 0xFF89B4FA);
-        graphics.fill(bx + bw - 1, by, bx + bw, by + bh, 0xFF89B4FA);
-
-        float pulse = (float) (Math.sin(client.level.getGameTime() * 0.1) * 0.1 + 1.0);
-        int itemX = panelX + panelW / 2 - 16;
-        int itemY = panelY + 20;
-
-        RenderUtil.drawPulsingItem(graphics, targetStack, itemX, itemY, pulse);
-
-        String name = targetStack.getHoverName().getString();
-        graphics.drawString(client.font, name,
-            panelX + panelW / 2 - client.font.width(name) / 2, itemY + 40, 0xFFFFFF);
-
-        if (startTime != null) {
-            Duration elapsed = Duration.between(startTime, Instant.now());
-            String time = String.format("%02d:%02d.%02d",
-                elapsed.toMinutes(), elapsed.getSeconds() % 60, elapsed.toMillisPart() / 10);
-            graphics.drawString(client.font, "⏱ " + time,
-                panelX + panelW / 2 - client.font.width("⏱ " + time) / 2, itemY + 60, 0x89B4FA);
-
-            drawProgressRing(graphics, panelX + panelW / 2, itemY + 90, 30,
-                (elapsed.getSeconds() % 60) / 60f, 0x89B4FA);
-        }
-
-        graphics.drawString(client.font, "Get this item to win!",
-            panelX + panelW / 2 - client.font.width("Get this item to win!") / 2,
-            panelY + panelH - 25, 0xA6ADC8);
-    }
-
-    private static void drawProgressRing(GuiGraphics graphics, int cx, int cy, int radius, float progress, int color) {
-        int segments = 60;
-        for (int i = 0; i < segments * progress; i++) {
-            double angle = Math.toRadians(i * 360f / segments - 90);
-            int x1 = cx + (int) (Math.cos(angle) * (radius - 2));
-            int y1 = cy + (int) (Math.sin(angle) * (radius - 2));
-            int x2 = cx + (int) (Math.cos(angle) * radius);
-            int y2 = cy + (int) (Math.sin(angle) * radius);
-            graphics.fill(x1, y1, x2, y2, color);
-        }
     }
 
     private static void complete(Minecraft client) {
@@ -178,12 +120,12 @@ public class ChallengeHud {
 
     private static void writeResult(Duration elapsed) {
         try {
-            File configDir = new File(Platform.getConfigFolder().toFile(), "challenge");
+            File configDir = new File(EraBridge.configDir().toFile(), "challenge");
             configDir.mkdirs();
             File resultFile = new File(configDir, "challenge_result.json");
 
             JsonObject obj = new JsonObject();
-            obj.addProperty("item", BuiltInRegistries.ITEM.getKey(targetStack.getItem()).toString());
+            obj.addProperty("item", EraBridge.itemId(targetStack.getItem()));
             obj.addProperty("player", playerName);
             obj.addProperty("time_ticks", elapsed.toMillis() / 50);
             obj.addProperty("time_ms", elapsed.toMillis());

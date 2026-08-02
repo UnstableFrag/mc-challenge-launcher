@@ -20,9 +20,17 @@ dependencies {
     "minecraft"("com.mojang:minecraft:${mc}")
     "mappings"(mojmap)
     compileOnly(project(":common"))
-    modImplementation("net.fabricmc:fabric-loader:0.16.14")
-    modApi("dev.architectury:architectury-fabric:${info.architectury}")
-    include("dev.architectury:architectury-fabric:${info.architectury}")
+    if (mc == "1.16.5") {
+        // loom issue #322: fabric-loader 0.16.14 fails "compile only" against 1.16.5; pin 0.18.1.
+        modImplementation("net.fabricmc:fabric-loader:0.18.1")
+        // architectury 1.x has no maven artifact; resolved from vendor/m2.
+        modApi("dev.architectury:architectury-fabric:1.32.68")
+        include("dev.architectury:architectury-fabric:1.32.68")
+    } else {
+        modImplementation("net.fabricmc:fabric-loader:0.16.14")
+        modApi("dev.architectury:architectury-fabric:${info.architectury}")
+        include("dev.architectury:architectury-fabric:${info.architectury}")
+    }
 }
 
 base {
@@ -40,6 +48,9 @@ tasks.remapJar {
 }
 
 tasks.processResources {
+    // mc is a project property, not a task input by default: without this the task would
+    // be UP-TO-DATE across -Pmc runs and bake stale metadata into the jars.
+    inputs.property("mcVersion", mc)
     filesMatching("fabric.mod.json") {
         expand(
             "mcVersion" to mc,

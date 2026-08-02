@@ -26,6 +26,8 @@ subprojects {
         maven("https://maven.fabricmc.net/")
         maven("https://maven.neoforged.net/releases/")
         maven("https://maven.minecraftforge.net/")
+        // Local vendored architectury 1.x (no maven artifact) — only resolved for mc=1.16.5.
+        maven { url = uri(rootProject.file("vendor/m2")) }
     }
 
     java {

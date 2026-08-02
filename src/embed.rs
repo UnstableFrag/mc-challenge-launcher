@@ -1,18 +1,23 @@
 // src/embed.rs
 use include_dir::{include_dir, Dir};
 
-// Манифест встроенных jar-файлов — 34 файла по контракту нейминга:
+// Манифест встроенных jar-файлов — 46 файлов по контракту нейминга:
 //
-//   Fabric (16):    challenge-hud-{mc}.jar
+//   Fabric (22):    challenge-hud-{mc}.jar
+//     1.16.5, 1.17.1, 1.18.2, 1.19.2, 1.19.3, 1.19.4,
 //     1.20.1, 1.20.2, 1.20.4, 1.20.6, 1.21, 1.21.1, 1.21.2, 1.21.3,
 //     1.21.4, 1.21.5, 1.21.6, 1.21.7, 1.21.8, 1.21.9, 1.21.10, 1.21.11
-//   Forge (3):      challenge-hud-{mc}-forge.jar
+//   Forge (9):      challenge-hud-{mc}-forge.jar
+//     1.16.5, 1.17.1, 1.18.2, 1.19.2, 1.19.3, 1.19.4,
 //     1.20.1, 1.20.2, 1.20.4
 //   NeoForge (15):  challenge-hud-{mc}-neoforge.jar
 //     1.20.2, 1.20.4, 1.20.6, 1.21, 1.21.1, 1.21.2, 1.21.3,
 //     1.21.4, 1.21.5, 1.21.6, 1.21.7, 1.21.8, 1.21.9, 1.21.10, 1.21.11
 //
-// Полные имена файлов (34):
+// Полные имена файлов (46):
+//   challenge-hud-1.16.5.jar,      challenge-hud-1.17.1.jar,
+//   challenge-hud-1.18.2.jar,      challenge-hud-1.19.2.jar,
+//   challenge-hud-1.19.3.jar,      challenge-hud-1.19.4.jar,
 //   challenge-hud-1.20.1.jar,      challenge-hud-1.20.2.jar,
 //   challenge-hud-1.20.4.jar,      challenge-hud-1.20.6.jar,
 //   challenge-hud-1.21.jar,        challenge-hud-1.21.1.jar,
@@ -21,6 +26,9 @@ use include_dir::{include_dir, Dir};
 //   challenge-hud-1.21.6.jar,      challenge-hud-1.21.7.jar,
 //   challenge-hud-1.21.8.jar,      challenge-hud-1.21.9.jar,
 //   challenge-hud-1.21.10.jar,     challenge-hud-1.21.11.jar,
+//   challenge-hud-1.16.5-forge.jar,   challenge-hud-1.17.1-forge.jar,
+//   challenge-hud-1.18.2-forge.jar,   challenge-hud-1.19.2-forge.jar,
+//   challenge-hud-1.19.3-forge.jar,   challenge-hud-1.19.4-forge.jar,
 //   challenge-hud-1.20.1-forge.jar,   challenge-hud-1.20.2-forge.jar,
 //   challenge-hud-1.20.4-forge.jar,
 //   challenge-hud-1.20.2-neoforge.jar, challenge-hud-1.20.4-neoforge.jar,
@@ -83,6 +91,7 @@ impl Loader {
 
 /// Версии MC с Fabric jar (Quilt использует те же jar).
 pub const FABRIC_VERSIONS: &[&str] = &[
+    "1.16.5", "1.17.1", "1.18.2", "1.19.2", "1.19.3", "1.19.4",
     "1.20.1", "1.20.2", "1.20.4", "1.20.6",
     "1.21", "1.21.1", "1.21.2", "1.21.3", "1.21.4",
     "1.21.5", "1.21.6", "1.21.7", "1.21.8", "1.21.9",
@@ -90,7 +99,10 @@ pub const FABRIC_VERSIONS: &[&str] = &[
 ];
 
 /// Версии MC с Forge jar.
-pub const FORGE_VERSIONS: &[&str] = &["1.20.1", "1.20.2", "1.20.4"];
+pub const FORGE_VERSIONS: &[&str] = &[
+    "1.16.5", "1.17.1", "1.18.2", "1.19.2", "1.19.3", "1.19.4",
+    "1.20.1", "1.20.2", "1.20.4",
+];
 
 /// Версии MC с NeoForge jar (все, кроме 1.20.1).
 pub const NEOFORGE_VERSIONS: &[&str] = &[
@@ -144,7 +156,7 @@ pub fn jar_name(target: &Target) -> String {
 /// Краткое описание поддержки для UI/логов.
 pub fn support_summary() -> String {
     format!(
-        "Fabric: {} | Forge: {} (1.20.1–1.20.4) | NeoForge: {} (no 1.20.1) | Quilt: via Fabric",
+        "Fabric: {} | Forge: {} (1.16.5–1.20.4) | NeoForge: {} (1.20.2+) | Quilt: via Fabric",
         FABRIC_VERSIONS.len(),
         FORGE_VERSIONS.len(),
         NEOFORGE_VERSIONS.len(),

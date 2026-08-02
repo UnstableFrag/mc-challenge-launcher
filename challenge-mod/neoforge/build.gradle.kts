@@ -43,6 +43,9 @@ if (Versions.isNeoSupported(mc)) {
     }
 
     tasks.processResources {
+        // mc is a project property, not a task input by default: without this the task would
+        // be UP-TO-DATE across -Pmc runs and bake stale metadata into the jars.
+        inputs.property("mcVersion", mc)
         filesMatching("META-INF/neoforge.mods.toml") {
             expand(
                 "mcVersion" to mc,

@@ -16,11 +16,15 @@ public class TimeoutScreen extends Screen {
         renderBackground(graphics, mouseX, mouseY, delta);
         int cx = width / 2, cy = height / 2;
 
-        String title = "⏰  CHALLENGE FAILED!";
-        graphics.drawString(font, title, cx - font.width(title) / 2, cy - 30, 0xFF0000);
+        String title = EraBridge.translate("challengehud.screen.timeout.title");
+        graphics.drawString(font, title, cx - font.width(title) / 2, cy - 40, 0xFFFF0000);
 
-        String hint = "Time's up! Closing in " + (5 - ticks / 20) + "s...";
-        graphics.drawString(font, hint, cx - font.width(hint) / 2, cy + 10, 0xA6ADC8);
+        String itemName = ChallengeHud.targetStack.getHoverName().getString();
+        String subtitle = EraBridge.translate("challengehud.screen.timeout.subtitle", itemName);
+        graphics.drawString(font, subtitle, cx - font.width(subtitle) / 2, cy - 10, 0xFFFFFFFF);
+
+        String hint = EraBridge.translate("challengehud.screen.closing", 5 - ticks / 20);
+        graphics.drawString(font, hint, cx - font.width(hint) / 2, cy + 20, 0xFFA6ADC8);
     }
 
     @Override

@@ -13,7 +13,7 @@ authors="mcchallenge"
 
 [[dependencies.challengehud]]
 modId="neoforge"
-versionRange="[${neoVersion},)"
+versionRange="[${neoRange},)"
 mandatory=true
 
 [[dependencies.challengehud]]

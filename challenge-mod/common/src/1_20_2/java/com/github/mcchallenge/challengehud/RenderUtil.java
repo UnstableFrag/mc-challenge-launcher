@@ -15,4 +15,9 @@ public final class RenderUtil {
         graphics.renderItem(stack, 0, 0);
         graphics.pose().popPose();
     }
+
+    /** Static item render (no pose manipulation) used by the HUD panel. */
+    public static void drawItem(GuiGraphics graphics, ItemStack stack, int x, int y) {
+        graphics.renderItem(stack, x, y);
+    }
 }

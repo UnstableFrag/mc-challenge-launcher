@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use eframe::egui;
 use egui::{Align, Color32, Layout, Margin, RichText, Stroke};
 use tokio::sync::mpsc;
+use tokio::time::sleep;
 
 mod cleanup;
 mod embed;
@@ -41,6 +44,8 @@ const PANEL_STROKE: Color32 = Color32::from_rgb(52, 57, 67);
 struct Args {
     #[arg(long)]
     modpack: Option<String>,
+    #[arg(long, help = "Force casual mode: keep the pack between runs (overrides the GUI picker)")]
+    perpetual: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +112,40 @@ impl AppState {
 }
 
 // ---------------------------------------------------------------------------
+// Challenge mode
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Full (speedrun): the pack is deleted after the round (one try).
+    Full,
+    /// Casual (relaxed): the pack survives the round for the next run.
+    Casual,
+}
+
+impl Mode {
+    /// Value written into `mode.json` (`"mode"`).
+    fn as_str(self) -> &'static str {
+        match self {
+            Mode::Full => "full",
+            Mode::Casual => "casual",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Mode::Full => "Full — спидран",
+            Mode::Casual => "Casual — расслабленно",
+        }
+    }
+
+    /// Casual keeps the pack alive across rounds.
+    fn perpetual(self) -> bool {
+        matches!(self, Mode::Casual)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // UI <-> task messaging
 // ---------------------------------------------------------------------------
 
@@ -165,13 +204,21 @@ struct App {
     /// (timestamp, message) log lines.
     log_lines: Vec<(String, String)>,
     modpack_slug: Option<String>,
+    /// `--perpetual`: force casual mode (overrides the GUI picker).
+    perpetual: bool,
+    /// GUI picker: full (speedrun, pack deleted after the round) vs casual.
+    mode: Mode,
     tx: mpsc::UnboundedSender<UiMsg>,
     rx: mpsc::UnboundedReceiver<UiMsg>,
     egui_ctx: egui::Context,
 }
 
 impl App {
-    fn new(modpack_slug: Option<String>, egui_ctx: egui::Context) -> Self {
+    fn new(modpack_slug: Option<String>, perpetual: bool, egui_ctx: egui::Context) -> Self {
+        // The UI hardcodes dark fills (WINDOW_FILL etc.), so never inherit the
+        // OS light theme: it would make default widget text (and the log panel's
+        // `visuals().text_color()`) dark-on-dark and unreadable.
+        egui_ctx.set_theme(egui::ThemePreference::Dark);
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             state: AppState::Idle,
@@ -183,6 +230,8 @@ impl App {
                 vec![(ts, "mc-challenge-launcher ready".to_owned())]
             },
             modpack_slug,
+            perpetual,
+            mode: Mode::Full,
             tx,
             rx,
             egui_ctx,
@@ -230,6 +279,8 @@ impl App {
         let tx = self.tx.clone();
         let ctx = self.egui_ctx.clone();
         let slug = self.modpack_slug.clone();
+        // CLI --perpetual wins over the GUI picker.
+        let mode = if self.perpetual { Mode::Casual } else { self.mode };
         spawn_async_op(move || {
             let tc = TaskCtx { tx, ctx };
             async move {
@@ -241,7 +292,7 @@ impl App {
                     }
                 };
                 let api = ModrinthApi::new();
-                run_roll(api, mgr, slug, tc).await;
+                run_roll(api, mgr, slug, mode, tc).await;
             }
         });
     }
@@ -294,6 +345,24 @@ impl App {
             .inner_margin(Margin::symmetric(8, 3))
             .show(ui, |ui| {
                 ui.label(RichText::new(self.state.badge_text()).color(fg).strong().small());
+            });
+    }
+
+    /// Effective mode badge shown next to "Status" in the status panel.
+    fn mode_badge(&self, ui: &mut egui::Ui) {
+        let mode = if self.perpetual { Mode::Casual } else { self.mode };
+        let (text, fill) = match mode {
+            Mode::Full => ("FULL", Color32::from_rgb(235, 150, 70)),
+            Mode::Casual => ("CASUAL", Color32::from_rgb(140, 170, 255)),
+        };
+        let fg = fg_on(fill);
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, fill.gamma_multiply(0.7)))
+            .corner_radius(10)
+            .inner_margin(Margin::symmetric(8, 3))
+            .show(ui, |ui| {
+                ui.label(RichText::new(text).color(fg).strong().small());
             });
     }
 
@@ -388,7 +457,11 @@ impl App {
             .corner_radius(8)
             .inner_margin(Margin::same(12))
             .show(ui, |ui| {
-                ui.label(RichText::new("Status").strong());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Status").strong());
+                    ui.add_space(6.0);
+                    self.mode_badge(ui);
+                });
                 ui.add_space(10.0);
 
                 if self.state.busy() {
@@ -430,6 +503,32 @@ impl App {
                         }
                     }
                 }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(8.0);
+                // Mode picker: full (speedrun, one try) vs casual (relaxed).
+                // With --perpetual the picker is locked to casual.
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Mode").strong().small());
+                    if self.perpetual {
+                        ui.label(
+                            RichText::new("Casual (--perpetual)")
+                                .color(ACCENT)
+                                .small()
+                                .strong(),
+                        );
+                    }
+                });
+                ui.add_space(2.0);
+                ui.add_enabled_ui(!self.perpetual, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.mode, Mode::Full, "Full — спидран");
+                        ui.add_space(10.0);
+                        ui.radio_value(&mut self.mode, Mode::Casual, "Casual — расслабленно");
+                    });
+                });
+                ui.add_space(6.0);
 
                 ui.add_space(14.0);
                 ui.separator();
@@ -588,7 +687,13 @@ where
     });
 }
 
-async fn run_roll(api: ModrinthApi, mgr: InstanceManager, slug_opt: Option<String>, tc: TaskCtx) {
+async fn run_roll(
+    api: ModrinthApi,
+    mgr: InstanceManager,
+    slug_opt: Option<String>,
+    mode: Mode,
+    tc: TaskCtx,
+) {
     let slug_clone = slug_opt.clone();
     let pack = if let Some(slug) = &slug_clone {
         tc.log(format!("Using specified modpack: {}", slug));
@@ -635,7 +740,11 @@ async fn run_roll(api: ModrinthApi, mgr: InstanceManager, slug_opt: Option<Strin
         embed::jar_name(&target)
     ));
 
-    if slug_opt.is_some() {
+    // `fresh` = the launcher created a brand-new instance this run:
+    // direct .mrpack mode always (re)creates the instance dir; Modrinth App
+    // mode is fresh only if the matching profile did not exist before we
+    // opened the modrinth:// link.
+    let (instance, fresh) = if slug_opt.is_some() {
         tc.state(AppState::Injecting);
         tc.log("Downloading & extracting .mrpack...");
         let instance = match mgr
@@ -650,10 +759,11 @@ async fn run_roll(api: ModrinthApi, mgr: InstanceManager, slug_opt: Option<Strin
             }
         };
         tc.log(format!("Instance: {}", instance.path.display()));
-        inject_mod(&instance, &target, &tc);
+        (instance, true)
     } else {
         tc.state(AppState::OpeningModrinth);
         tc.log("Opening in Modrinth App...");
+        let existed_before = mgr.profile_exists(&pack.slug, &pack.title);
         if let Err(e) = open::that(format!("modrinth://modpack/{}", pack.slug)) {
             tc.log(format!("Could not open Modrinth App: {}", e));
             tc.log("Use '--modpack <slug>' for direct download mode");
@@ -672,11 +782,24 @@ async fn run_roll(api: ModrinthApi, mgr: InstanceManager, slug_opt: Option<Strin
             }
         };
         tc.log(format!("Instance: {}", instance.path.display()));
-        inject_mod(&instance, &target, &tc);
-    }
+        (instance, !existed_before)
+    };
+
+    inject_mod(&instance, &target, &tc);
+    write_mode_json(&instance, mode, fresh, &tc);
 
     tc.log("Done! Launch Minecraft to start the challenge");
     tc.done();
+
+    // Background poller: waits for the challenge to finish and acts on it
+    // (delete the pack in full mode / keep it in casual mode).
+    spawn_poller(
+        instance.config_dir.clone(),
+        mode,
+        pack.slug.clone(),
+        pack.title.clone(),
+        tc,
+    );
 }
 
 fn inject_mod(instance: &Instance, target: &embed::Target, tc: &TaskCtx) {
@@ -702,18 +825,134 @@ fn inject_mod(instance: &Instance, target: &embed::Target, tc: &TaskCtx) {
     ));
 }
 
+/// Writes `<config_dir>/challenge/mode.json` for the challenge mod.
+/// Always written (even for single-run mode) so the mod never picks up a
+/// stale `mode.json` left over from a previous run.
+///
+/// - `"mode"`: `"full"` (speedrun) or `"casual"` (relaxed) — the GUI picker
+///   (or `--perpetual`, which forces casual).
+/// - `"fresh"`: `true` when the launcher created a brand-new instance this
+///   run (always in direct .mrpack mode; in Modrinth App mode only when the
+///   profile did not exist before the `modrinth://` link was opened). The mod
+///   may use it to (re)start a challenge on fresh installs.
+/// - `"perpetual"`: `false` for full, `true` for casual (the pack survives
+///   the round).
+fn write_mode_json(instance: &Instance, mode: Mode, fresh: bool, tc: &TaskCtx) {
+    let dir = instance.config_dir.join("challenge");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tc.log(format!("Could not create challenge config dir: {}", e));
+        return;
+    }
+    let json = format!(
+        "{{\"mode\":\"{}\",\"fresh\":{},\"perpetual\":{}}}",
+        mode.as_str(),
+        fresh,
+        mode.perpetual()
+    );
+    let dest = dir.join("mode.json");
+    if let Err(e) = std::fs::write(&dest, json) {
+        tc.log(format!("Could not write {}: {}", dest.display(), e));
+        return;
+    }
+    tc.log(format!(
+        "Mode: {} (fresh={}, perpetual={})",
+        mode.label(),
+        fresh,
+        mode.perpetual()
+    ));
+}
+
+/// Poll interval while waiting for the challenge state file.
+const POLL_INTERVAL_SECS: u64 = 5;
+/// Give up (and keep the pack) if the state file never appears.
+const POLL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Background poller for the one-try-one-pack lifecycle.
+///
+/// Runs on its own thread (via `spawn_async_op`) while the UI shows Done and
+/// polls `<config_dir>/challenge/challenge_state.json`, which the challenge
+/// mod writes with the round state: IDLE (game running, not started),
+/// SEALED (target locked in), ACTIVE (round in progress), DONE (finished).
+///
+/// On DONE:
+/// - full mode  -> the pack is deleted (fresh challenge next time);
+/// - casual     -> the pack is kept for the next run.
+///
+/// Non-DONE states are polled indefinitely (the player may play for hours
+/// while ACTIVE). The poller gives up — keeping the pack — only if the state
+/// file never appears for `POLL_TIMEOUT`, i.e. the game was closed before
+/// the mod could write any state.
+fn spawn_poller(config_dir: PathBuf, mode: Mode, slug: String, title: String, tc: TaskCtx) {
+    spawn_async_op(move || async move {
+        let state_path = config_dir.join("challenge").join("challenge_state.json");
+        let mut missing_since: Option<Instant> = None;
+        loop {
+            match read_state(&state_path).as_deref() {
+                Some("DONE") => {
+                    if mode == Mode::Full {
+                        tc.log("Challenge finished — deleting pack");
+                        let work_dir =
+                            dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
+                        cleanup_pack(&slug, &title, &work_dir, &tc).await;
+                        tc.log("Pack deleted — challenge finished");
+                    } else {
+                        tc.log("Casual mode: pack kept for next run");
+                    }
+                    return;
+                }
+                Some(_) => {
+                    // IDLE / SEALED / ACTIVE: game is (still) running.
+                    missing_since = None;
+                }
+                None => {
+                    let now = Instant::now();
+                    match missing_since {
+                        Some(start) if now.duration_since(start) >= POLL_TIMEOUT => {
+                            tc.log("Game closed before finishing — pack kept");
+                            return;
+                        }
+                        _ => {
+                            missing_since.get_or_insert(now);
+                        }
+                    }
+                }
+            }
+            sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        }
+    });
+}
+
+/// Reads the `"state"` field of `challenge_state.json` (None if missing).
+fn read_state(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|content| parse_state(&content))
+}
+
+/// Minimal `"state":"..."` extraction — serde_json is already a dependency.
+fn parse_state(content: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+    value.get("state")?.as_str().map(str::to_string)
+}
+
+/// Removes the Modrinth App profile and, if present, the direct-mode
+/// work_dir copy. Shared by run_cleanup and the spawn_poller callback.
+async fn cleanup_pack(slug: &str, title: &str, work_dir: &std::path::Path, tc: &TaskCtx) {
+    if let Err(e) = clean_instance(slug, title).await {
+        tc.log(format!("Cleanup issue: {}", e));
+    }
+    let direct = work_dir.join(slug);
+    if direct.exists() {
+        std::fs::remove_dir_all(&direct).ok();
+    }
+}
+
 async fn run_cleanup(pack: Modpack, tc: TaskCtx) {
     tc.log("Cleaning up...");
     let slug = pack.slug.clone();
     let title = pack.title.clone();
-    if let Err(e) = clean_instance(&slug, &title).await {
-        tc.log(format!("Cleanup issue: {}", e));
-    }
     let work_dir = dirs::data_dir().unwrap().join("mc-challenge-launcher/instances");
-    let direct = work_dir.join(&slug);
-    if direct.exists() {
-        std::fs::remove_dir_all(&direct).ok();
-    }
+    cleanup_pack(&slug, &title, &work_dir, &tc).await;
     tc.log("Cleaned up");
     tc.error("");
 }
@@ -909,7 +1148,11 @@ async fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             setup_fonts(&cc.egui_ctx);
-            Ok(Box::new(App::new(args.modpack.clone(), cc.egui_ctx.clone())))
+            Ok(Box::new(App::new(
+                args.modpack.clone(),
+                args.perpetual,
+                cc.egui_ctx.clone(),
+            )))
         }),
     )
 }

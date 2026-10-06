@@ -50,6 +50,7 @@ if (Versions.isNeoSupported(mc)) {
             expand(
                 "mcVersion" to mc,
                 "neoVersion" to (info.neoforge ?: ""),
+                "neoRange" to (info.neoRange ?: info.neoforge ?: ""),
                 "archVersion" to info.architectury,
             )
         }

@@ -69,6 +69,22 @@ impl InstanceManager {
         anyhow::bail!("Instance not found for slug={} title={}", slug, title)
     }
 
+    /// True if a profile matching `slug`/`title` already exists in the
+    /// Modrinth App profiles dir. Used to tell a freshly installed instance
+    /// (`fresh=true` in mode.json) from an existing profile we only inject
+    /// into.
+    pub fn profile_exists(&self, slug: &str, title: &str) -> bool {
+        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if matches(&name, slug, title) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub async fn create_instance_from_modpack(&self, slug: &str, client: &reqwest::Client, preferred: Option<&embed::Target>) -> Result<Instance> {
         let version_url = format!("https://api.modrinth.com/v2/project/{}/version", slug);
         let versions = client

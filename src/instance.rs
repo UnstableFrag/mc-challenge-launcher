@@ -6,7 +6,6 @@ use tokio::time::{sleep, Duration};
 use zip::ZipArchive;
 use std::io::Cursor;
 use std::fs;
-use std::process::Command;
 
 use crate::embed;
 
@@ -186,14 +185,5 @@ impl InstanceManager {
             config_dir,
             path: instance_dir,
         })
-    }
-
-    pub fn launch_minecraft(&self, instance: &Instance, java_path: Option<&str>) -> Result<std::process::Child> {
-        let java = java_path.unwrap_or("java");
-        let mut cmd = Command::new(java);
-        cmd.arg("-jar")
-            .arg(instance.path.join("fabric-launcher.jar").to_string_lossy().to_string())
-            .current_dir(&instance.path);
-        Ok(cmd.spawn()?)
     }
 }

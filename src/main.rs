@@ -158,6 +158,7 @@ enum UiMsg {
     Done,
 }
 
+#[derive(Clone)]
 struct TaskCtx {
     tx: mpsc::UnboundedSender<UiMsg>,
     ctx: egui::Context,
@@ -292,7 +293,12 @@ impl App {
                     }
                 };
                 let api = ModrinthApi::new();
-                run_roll(api, mgr, slug, mode, tc).await;
+                // Keep a handle so a returned Err is surfaced to the UI
+                // exactly once (run_roll no longer reports it itself).
+                let err_tc = tc.clone();
+                if let Err(e) = run_roll(api, mgr, slug, mode, tc).await {
+                    err_tc.error(e.to_string());
+                }
             }
         });
     }
@@ -687,13 +693,20 @@ where
     });
 }
 
+/// Runs one roll end to end.
+///
+/// Returns `Err` for failures that happen *after* the per-step logging and
+/// must abort the run (currently: the challenge mod could not be injected).
+/// Every step that already logged its own detail keeps reporting through
+/// `tc.error(...)` and returns `Ok(())`; the caller surfaces a returned `Err`
+/// to the UI exactly once.
 async fn run_roll(
     api: ModrinthApi,
     mgr: InstanceManager,
     slug_opt: Option<String>,
     mode: Mode,
     tc: TaskCtx,
-) {
+) -> anyhow::Result<()> {
     let slug_clone = slug_opt.clone();
     let pack = if let Some(slug) = &slug_clone {
         tc.log(format!("Using specified modpack: {}", slug));
@@ -701,7 +714,7 @@ async fn run_roll(
             Ok(pack) => pack,
             Err(e) => {
                 tc.error(e.to_string());
-                return;
+                return Ok(());
             }
         }
     } else {
@@ -714,7 +727,7 @@ async fn run_roll(
             }
             Err(e) => {
                 tc.error(e.to_string());
-                return;
+                return Ok(());
             }
         }
     };
@@ -730,7 +743,7 @@ async fn run_roll(
                 embed::support_summary()
             ));
             tc.error("");
-            return;
+            return Ok(());
         }
     };
     tc.log(format!(
@@ -755,7 +768,7 @@ async fn run_roll(
             Err(e) => {
                 tc.log(format!("Download failed: {}", e));
                 tc.error("");
-                return;
+                return Ok(());
             }
         };
         tc.log(format!("Instance: {}", instance.path.display()));
@@ -768,7 +781,7 @@ async fn run_roll(
             tc.log(format!("Could not open Modrinth App: {}", e));
             tc.log("Use '--modpack <slug>' for direct download mode");
             tc.error("");
-            return;
+            return Ok(());
         }
         tc.state(AppState::Injecting);
         tc.log("Waiting for instance (up to 2 min)...");
@@ -778,14 +791,17 @@ async fn run_roll(
                 tc.log(e.to_string());
                 tc.log("Install Modrinth App or use '--modpack <slug>'");
                 tc.error("");
-                return;
+                return Ok(());
             }
         };
         tc.log(format!("Instance: {}", instance.path.display()));
         (instance, !existed_before)
     };
 
-    inject_mod(&instance, &target, &tc);
+    // No challenge mod -> no challenge. Abort before writing mode.json, before
+    // the "Done!" log and before the poller, so a failed injection can never be
+    // reported as a successful roll.
+    inject_mod(&instance, &target, &tc)?;
     write_mode_json(&instance, mode, fresh, &tc);
 
     tc.log("Done! Launch Minecraft to start the challenge");
@@ -800,34 +816,54 @@ async fn run_roll(
         pack.title.clone(),
         tc,
     );
+    Ok(())
 }
 
-fn inject_mod(instance: &Instance, target: &embed::Target, tc: &TaskCtx) {
+/// Copies the embedded jar for `target` into the instance `mods/` dir.
+///
+/// Returns `Err` when the jar for the resolved (MC version, loader) is not
+/// embedded in the binary or the copy fails — the caller MUST propagate the
+/// error instead of continuing, otherwise the run would report success with no
+/// challenge mod installed.
+fn inject_mod(instance: &Instance, target: &embed::Target, tc: &TaskCtx) -> anyhow::Result<()> {
     let jar_name = embed::jar_name(target);
     let Some(file) = embed::MOD_JAR_DIR.get_file(&jar_name) else {
-        tc.error(format!("embedded mod jar missing in binary: {}", jar_name));
-        return;
+        anyhow::bail!(
+            "embedded mod jar missing in binary: {} (MC {}, {})",
+            jar_name,
+            target.version,
+            target.loader.display_name()
+        );
     };
-    let dest = instance.mods_dir.join(jar_name);
-    if let Err(e) = std::fs::create_dir_all(&instance.mods_dir) {
-        tc.error(e.to_string());
-        return;
-    }
-    if let Err(e) = std::fs::write(&dest, file.contents()) {
-        tc.error(e.to_string());
-        return;
-    }
+    let dest = instance.mods_dir.join(&jar_name);
+    std::fs::create_dir_all(&instance.mods_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "could not create mods dir {}: {}",
+            instance.mods_dir.display(),
+            e
+        )
+    })?;
+    std::fs::write(&dest, file.contents())
+        .map_err(|e| anyhow::anyhow!("could not write {}: {}", dest.display(), e))?;
     tc.log(format!(
         "Injected {} (MC {}, {})",
         dest.display(),
         target.version,
         target.loader.display_name()
     ));
+    Ok(())
 }
 
 /// Writes `<config_dir>/challenge/mode.json` for the challenge mod.
 /// Always written (even for single-run mode) so the mod never picks up a
 /// stale `mode.json` left over from a previous run.
+///
+/// A stale `<config_dir>/challenge/challenge_state.json` is deleted as well:
+/// in full mode the player can quit before winning, the poller then times out
+/// and keeps the pack, and the next roll reuses the same profile. Without the
+/// delete, the mod's `loadState()` restores the previous run's sealed target
+/// and refuses to re-seal (target stack non-empty), so the new run would
+/// silently inherit the old goal.
 ///
 /// - `"mode"`: `"full"` (speedrun) or `"casual"` (relaxed) — the GUI picker
 ///   (or `--perpetual`, which forces casual).
@@ -842,6 +878,20 @@ fn write_mode_json(instance: &Instance, mode: Mode, fresh: bool, tc: &TaskCtx) {
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tc.log(format!("Could not create challenge config dir: {}", e));
         return;
+    }
+    let stale_state = dir.join("challenge_state.json");
+    match std::fs::remove_file(&stale_state) {
+        Ok(()) => tc.log(format!(
+            "Cleared previous challenge state: {}",
+            stale_state.display()
+        )),
+        // Normal on a first run (nothing to clear).
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tc.log(format!(
+            "Could not clear {}: {}",
+            stale_state.display(),
+            e
+        )),
     }
     let json = format!(
         "{{\"mode\":\"{}\",\"fresh\":{},\"perpetual\":{}}}",

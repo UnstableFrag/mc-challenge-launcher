@@ -30,7 +30,8 @@ import java.util.Random;
  *   <li>{@code SEALED} — target rolled and committed to disk BEFORE entering the world;
  *       survives restarts (persisted to {@code config/challenge/challenge_state.json}).</li>
  *   <li>{@code ACTIVE} — promoted from SEALED on world entry (or started dishonestly);
- *       the timer starts here and has no deadline.</li>
+ *       the timer starts here. In FULL mode the run is capped at a 5-minute RTA deadline
+ *       ({@link #TIMEOUT_MS}).</li>
  *   <li>{@code DONE}   — won or died; result written to disk. The next world entry
  *       resets to IDLE.</li>
  * </ul>
@@ -65,6 +66,14 @@ public class ChallengeHud {
         "barrier", "light", "fire"
     };
 
+    /**
+     * Deadline for a FULL-mode speedrun: 5 minutes, in wall-clock milliseconds.
+     * Checked against {@link #rtaMillis()} (RTA), NOT {@code igtMs} — IGT freezes while the
+     * game is paused, but a speedrun clock that stops when you alt-tab is wrong, and the
+     * PB/record metric is already RTA-based. CASUAL is untimed practice and is exempt.
+     */
+    private static final long TIMEOUT_MS = 300_000L;
+
     // Package-private static state read by the per-era EraBridge (HUD rendering)
     // and the per-era ChallengeSetupScreen (menu).
     static Minecraft client = Minecraft.getInstance();
@@ -83,7 +92,7 @@ public class ChallengeHud {
     static String resultItem = null;
     static Long resultMs = null;
 
-    /** Outcome of the finished challenge: "win" | "death" (null while running). */
+    /** Outcome of the finished challenge: "win" | "death" | "timeout" (null while running). */
     private static String resultOutcome = null;
 
     /**
@@ -115,7 +124,7 @@ public class ChallengeHud {
     static long toastUntilMs = 0;
 
     enum State { IDLE, SEALED, ACTIVE, DONE }
-    enum ChallengeType { ITEM, MOB_KILL, EXPLORE }
+    enum ChallengeType { ITEM }
     enum ChallengeMode { FULL, CASUAL }
 
     /** Called from the platform entrypoints (fabric/forge/neoforge) on client setup. */
@@ -145,33 +154,11 @@ public class ChallengeHud {
     }
 
     /**
-     * Updates the challenge mode at runtime (called from the challenge setup screen)
-     * and persists it to {@code mode.json}, preserving the launcher-written
-     * {@code fresh} / {@code perpetual} flags.
-     */
-    public static void setMode(ChallengeMode newMode) {
-        if (newMode == null) return;
-        mode = newMode;
-        try {
-            File modeFile = new File(new File(EraBridge.configDir().toFile(), "challenge"), "mode.json");
-            JsonObject obj = new JsonObject();
-            obj.addProperty("mode", mode == ChallengeMode.CASUAL ? "casual" : "full");
-            obj.addProperty("fresh", freshWorld);
-            obj.addProperty("perpetual", perpetual);
-            File parent = modeFile.getParentFile();
-            if (parent != null) parent.mkdirs();
-            try (FileWriter fw = new FileWriter(modeFile)) {
-                GSON.toJson(obj, fw);
-            }
-            LOGGER.info("Challenge mode set to {}", mode);
-        } catch (Exception e) {
-            LOGGER.error("Failed to write challenge mode", e);
-        }
-    }
-
-    /**
      * Reads {@code config/challenge/mode.json} (written by the launcher before launch):
      * {@code {"mode":"full"|"casual","fresh":bool,"perpetual":bool}}.
+     *
+     * <p>The mode is owned exclusively by the launcher: the mod only READS it and never
+     * writes it back (the setup screen displays the mode but cannot switch it).
      */
     private static void loadMode() {
         mode = ChallengeMode.FULL;
@@ -316,8 +303,9 @@ public class ChallengeHud {
      *   <li>SEALED -> ACTIVE on world entry; in FULL mode only in a hardcore world
      *       (otherwise the challenge stays SEALED and the HUD shows the hardcore
      *       warning), in CASUAL mode always.</li>
-     *   <li>ACTIVE: in FULL mode death = loss; in CASUAL death is ignored (the
-     *       challenge continues after respawn).</li>
+     *   <li>ACTIVE: in FULL mode death = loss and the 5-minute RTA deadline = loss; in
+     *       CASUAL neither applies (death is ignored and the run is untimed practice, so
+     *       the challenge continues after respawn with no cutoff).</li>
      * </ul>
      */
     static void tick(Minecraft client) {
@@ -396,6 +384,15 @@ public class ChallengeHud {
             return;
         }
 
+        // 5-minute deadline (FULL mode only). Checked BEFORE the win test so the cutoff is
+        // hard: at RTA >= 5:00 the run can no longer be won. `rtaStartMs > 0` means the
+        // clock is really running (rtaMillis() returns 0 otherwise), so a freshly promoted
+        // or restored ACTIVE run can never trip the deadline on the spot.
+        if (mode == ChallengeMode.FULL && rtaStartMs > 0 && rtaMillis() >= TIMEOUT_MS) {
+            timeout(client);
+            return;
+        }
+
         // IGT: 50 ms per client tick, frozen while the game is paused.
         if (!client.isPaused()) {
             igtMs += 50;
@@ -406,9 +403,6 @@ public class ChallengeHud {
                 if (EraBridge.countItem(client, targetStack.getItem()) > 0) {
                     complete(client);
                 }
-                break;
-            case MOB_KILL:
-            case EXPLORE:
                 break;
         }
     }
@@ -432,6 +426,29 @@ public class ChallengeHud {
         LOGGER.info("Challenge failed — player died!");
     }
 
+    /**
+     * Deadline = loss (FULL mode only): the challenge ends the moment RTA reaches
+     * {@link #TIMEOUT_MS}. Mirrors {@link #fail(Minecraft)} step for step — same ACTIVE
+     * guard (so it fires exactly once), same {@code DONE} transition, same persistence —
+     * but records {@code "result":"timeout"} and opens the era {@link TimeoutScreen}
+     * instead of the death screen. No new state fields: {@code result_ms} stays null, as
+     * on death, and records.json only gains an attempt, never a PB or a win.
+     */
+    private static void timeout(Minecraft client) {
+        if (state != State.ACTIVE) return;
+        state = State.DONE;
+        resultItem = EraBridge.itemId(targetStack.getItem());
+        resultMs = null;
+        resultOutcome = "timeout";
+        writeState();
+        if (freshWorld) {
+            attempts++;
+            saveRecords();
+        }
+        client.execute(() -> client.setScreen(new TimeoutScreen()));
+        LOGGER.info("Challenge failed — 5:00 deadline reached (attempts={})", attempts);
+    }
+
     private static void complete(Minecraft client) {
         if (state != State.ACTIVE) return;
         state = State.DONE;
@@ -445,7 +462,6 @@ public class ChallengeHud {
         resultMs = rtaMs;
         resultOutcome = "win";
         writeState();
-        writeResult(rtaMs);
 
         // Records only count for legit FULL runs on freshly created worlds;
         // practice runs (existing world) and CASUAL never touch records.json.
@@ -596,27 +612,6 @@ public class ChallengeHud {
             }
         } catch (Exception e) {
             LOGGER.error("Failed to write challenge records", e);
-        }
-    }
-
-    private static void writeResult(long rtaMs) {
-        try {
-            File configDir = new File(EraBridge.configDir().toFile(), "challenge");
-            configDir.mkdirs();
-            File resultFile = new File(configDir, "challenge_result.json");
-
-            JsonObject obj = new JsonObject();
-            obj.addProperty("item", EraBridge.itemId(targetStack.getItem()));
-            obj.addProperty("player", playerName);
-            obj.addProperty("time_ticks", rtaMs / 50);
-            obj.addProperty("time_ms", rtaMs);
-            obj.addProperty("igt_ms", igtMs);
-
-            try (FileWriter fw = new FileWriter(resultFile)) {
-                GSON.toJson(obj, fw);
-            }
-        } catch (Exception e) {
-            LOGGER.error("Failed to write result", e);
         }
     }
 

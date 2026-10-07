@@ -23,6 +23,8 @@
   "challengehud.menu.title": "Challenge setup",
   "challengehud.menu.mode.full": "Full challenge",
   "challengehud.menu.mode.casual": "Casual",
+  "challengehud.menu.mode.label": "Mode",
+  "challengehud.menu.mode.source": "Set by the launcher",
   "challengehud.menu.rules.full": "Speedrun for a random item: pick a goal, join a hardcore world, the timer starts on its own.",
   "challengehud.menu.rules.casual": "No record, no hardcore requirement.",
   "challengehud.menu.category.fresh": "Fresh world — a fair run",

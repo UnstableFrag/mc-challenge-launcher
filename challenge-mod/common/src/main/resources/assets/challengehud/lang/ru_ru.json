@@ -23,6 +23,8 @@
   "challengehud.menu.title": "Настройка челленджа",
   "challengehud.menu.mode.full": "Полный челлендж",
   "challengehud.menu.mode.casual": "Без рекорда",
+  "challengehud.menu.mode.label": "Режим",
+  "challengehud.menu.mode.source": "Задаёт лаунчер",
   "challengehud.menu.rules.full": "Спидран за случайный предмет: выбери цель и зайди в хардкорный мир — таймер пойдёт сам.",
   "challengehud.menu.rules.casual": "Без рекорда и без хардкор-ограничений.",
   "challengehud.menu.category.fresh": "Свежий мир — честный забег",

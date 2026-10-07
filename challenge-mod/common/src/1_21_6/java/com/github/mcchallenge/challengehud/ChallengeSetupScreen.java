@@ -1,6 +1,7 @@
 package com.github.mcchallenge.challengehud;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import java.lang.reflect.Method;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import net.minecraft.client.gui.GuiGraphics;
@@ -15,9 +16,14 @@ import net.minecraft.world.item.ItemStack;
  *
  * <p>Input handling: 1.21.9 replaced {@code mouseClicked(double,double,int)} with an
  * event-object parameter ({@code MouseButtonEvent}) whose class does not exist on
- * 1.21.6..1.21.8, so no single override signature compiles on the whole era. All mouse
- * and keyboard input is therefore polled in {@link #tick()} from the raw input state
- * (MouseHandler + InputConstants/GLFW) — a surface that is stable across 1.21.6..1.21.11.
+ * 1.21.6..1.21.8, so no single override signature compiles on the whole era. The keyboard
+ * callback breaks over the same range ({@code keyPressed(int,int,int)} →
+ * {@code keyPressed(KeyEvent)}), so overriding it is no help either. All mouse and keyboard
+ * input is therefore polled in {@link #tick()} from the raw input state. The mouse surface
+ * ({@code MouseHandler.isLeftPressed}, {@code getScaledXPos/getScaledYPos}) is stable across
+ * 1.21.6..1.21.11 and is called directly; the keyboard surface
+ * ({@code InputConstants.isKeyDown}) is <em>not</em> — its signature flips mid-era, so it
+ * goes through the reflective lookup in {@link #isKeyDown(int)}.
  *
  * <p>Layout (all eras share the same coordinates):
  * <pre>
@@ -55,6 +61,14 @@ public class ChallengeSetupScreen extends Screen {
     /** Previous-frame input state for rising-edge detection in {@link #tick()}. */
     private boolean prevLeftDown = false;
     private boolean prevEscDown = false;
+
+    /** Cached {@code InputConstants.isKeyDown} lookup; see {@link #isKeyDown(int)}. */
+    private static Method keyDownMethod;
+    /** True when {@link #keyDownMethod} takes the {@code Window}, false when it takes a GLFW handle. */
+    private static boolean keyDownTakesWindow;
+    /** Cached no-arg {@code long} handle accessor on the window; see {@link #resolveHandle(Class)}. */
+    private static Method handleMethod;
+    private static boolean keyDownResolved = false;
 
     enum ConfirmAction { NONE, SEAL, RESEAL }
 
@@ -184,7 +198,7 @@ public class ChallengeSetupScreen extends Screen {
         }
         if (mc.getWindow() != null) {
             // B2: ESC closes the confirm dialog first, then the screen.
-            boolean esc = InputConstants.isKeyDown(mc.getWindow(), InputConstants.KEY_ESCAPE);
+            boolean esc = isKeyDown(InputConstants.KEY_ESCAPE);
             if (esc && !prevEscDown) {
                 if (confirmAction != ConfirmAction.NONE) {
                     confirmAction = ConfirmAction.NONE;
@@ -194,6 +208,83 @@ public class ChallengeSetupScreen extends Screen {
             }
             prevEscDown = esc;
         }
+    }
+
+    /**
+     * Reads the raw pressed-state of a key without hard-linking to one {@code InputConstants}
+     * signature, because this source set is compiled once and remapped across 1.21.6..1.21.11 and
+     * the signature <em>flips inside that range</em>:
+     *
+     * <ul>
+     *   <li>1.21.6: {@code isKeyDown(long window, int key)} — raw GLFW handle, so passing a
+     *       {@code Window} fails to compile: {@code error: incompatible types: Window cannot be
+     *       converted to long}. The handle is read via {@code Window.getWindow()}.
+     *   <li>1.21.11: {@code isKeyDown(Window window, int key)}, and the handle accessor has
+     *       become {@code Window.handle()}.
+     * </ul>
+     *
+     * <p>No single direct call can satisfy both ends, so we resolve the overload plus the handle
+     * accessor reflectively, on first use, and cache them. A miss degrades to "key not held"
+     * (costs ESC-to-close; the mouse path in {@link #tick()} is untouched) instead of throwing —
+     * this is the same reason input is polled from raw state at all, since the keyboard callback
+     * breaks over the same range ({@code keyPressed(int,int,int)} → {@code keyPressed(KeyEvent)}).
+     */
+    private static boolean isKeyDown(int keyCode) {
+        Minecraft mc = ChallengeHud.client;
+        Object window = mc == null ? null : mc.getWindow();
+        if (window == null) return false;
+
+        if (!keyDownResolved) {
+            keyDownResolved = true;
+            keyDownMethod = resolveKeyDown(window.getClass());
+            // Discriminate on the real parameter type: resolveKeyDown() falls back to the
+            // handle overload when no Window one exists, so a non-null result alone does
+            // not tell us which one we got.
+            keyDownTakesWindow = keyDownMethod != null
+                    && keyDownMethod.getParameterTypes()[0].isAssignableFrom(window.getClass());
+            if (keyDownMethod != null) {
+                keyDownMethod.setAccessible(true);
+                handleMethod = resolveHandle(window.getClass());
+                if (handleMethod != null) handleMethod.setAccessible(true);
+            }
+        }
+        if (keyDownMethod == null) return false;
+
+        try {
+            Object arg = keyDownTakesWindow ? window : (Object) glfwHandle(window);
+            return (Boolean) keyDownMethod.invoke(null, arg, keyCode);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** Prefers the {@code Window}-taking overload; falls back to the raw-handle one. */
+    private static Method resolveKeyDown(Class<?> windowClass) {
+        Method byHandle = null;
+        for (Method m : InputConstants.class.getMethods()) {
+            if (!"isKeyDown".equals(m.getName())) continue;
+            Class<?>[] params = m.getParameterTypes();
+            if (params.length != 2 || params[1] != int.class) continue;
+            if (params[0].isAssignableFrom(windowClass)) return m;
+            if (byHandle == null && params[0] == long.class) byHandle = m;
+        }
+        return byHandle;
+    }
+
+    /** Finds the GLFW handle accessor: {@code handle()} on 1.21.11+, else {@code getWindow()}. */
+    private static Method resolveHandle(Class<?> windowClass) {
+        Method fallback = null;
+        for (Method m : windowClass.getMethods()) {
+            if (m.getParameterCount() != 0 || m.getReturnType() != long.class) continue;
+            if ("handle".equals(m.getName())) return m;
+            if ("getWindow".equals(m.getName())) fallback = m;
+        }
+        return fallback;
+    }
+
+    private static long glfwHandle(Object window) throws ReflectiveOperationException {
+        if (handleMethod == null) throw new NoSuchMethodException("no GLFW handle accessor on " + window.getClass());
+        return (Long) handleMethod.invoke(window);
     }
 
     /** Processes a fresh left click at GUI-scaled coordinates (dialog hit-test first). */
@@ -248,17 +339,17 @@ public class ChallengeSetupScreen extends Screen {
             translate(full ? "challengehud.menu.mode.full" : "challengehud.menu.mode.casual"),
             cx, panelY + 26, full ? COLOR_ACCENT : COLOR_TEXT);
 
-        String rules = plain(font.plainSubstrByWidth(
+        String rules = font.plainSubstrByWidth(
             translate(full ? "challengehud.menu.rules.full" : "challengehud.menu.rules.casual"),
-            panelW - 24));
+            panelW - 24);
         drawCentered(graphics, rules, cx, panelY + 38, COLOR_TEXT);
 
         if (full) {
-            String cat = plain(font.plainSubstrByWidth(translate(
+            String cat = font.plainSubstrByWidth(translate(
                 ChallengeHud.freshWorld
                     ? "challengehud.menu.category.fresh"
                     : "challengehud.menu.category.practice"),
-                panelW - 24));
+                panelW - 24);
             drawCentered(graphics, cat, cx, panelY + 50,
                 ChallengeHud.freshWorld ? COLOR_TEXT : COLOR_WARNING);
         }
@@ -280,13 +371,13 @@ public class ChallengeSetupScreen extends Screen {
             // Item name with registry-id fallback when the hover name is untranslated.
             String itemName = itemDisplayName(stack);
             boolean fallback = stack.isEmpty() || itemName.equals(EraBridge.itemId(stack.getItem()));
-            drawCentered(graphics, plain(font.plainSubstrByWidth(itemName, panelW - 24)),
+            drawCentered(graphics, font.plainSubstrByWidth(itemName, panelW - 24),
                 cx, panelY + 116, fallback ? COLOR_TEXT : COLOR_NAME);
 
             if (full && ChallengeHud.freshWorld) {
                 String pb = ChallengeHud.bestMs < 0 ? "--" : ChallengeHud.formatTime(ChallengeHud.bestMs);
-                drawCentered(graphics, plain(font.plainSubstrByWidth(
-                    translate("challengehud.menu.pb", pb), panelW - 24)),
+                drawCentered(graphics, font.plainSubstrByWidth(
+                    translate("challengehud.menu.pb", pb), panelW - 24),
                     cx, panelY + 128, COLOR_ACCENT);
             }
         }
@@ -325,7 +416,7 @@ public class ChallengeSetupScreen extends Screen {
         String body = confirmAction == ConfirmAction.RESEAL
             ? translate("challengehud.menu.confirm.reseal.body")
             : translate("challengehud.menu.confirm.body", itemDisplayName(ChallengeHud.targetStack));
-        body = plain(font.plainSubstrByWidth(body, dlgW - 24));
+        body = font.plainSubstrByWidth(body, dlgW - 24);
         drawCentered(graphics, body, cx, dlgY + 34, COLOR_TEXT);
 
         drawButton(graphics, lockRect(), mouseX, mouseY, translate("challengehud.menu.confirm.ok"));
@@ -337,7 +428,7 @@ public class ChallengeSetupScreen extends Screen {
         graphics.fill(r[0], r[1], r[0] + r[2], r[1] + r[3],
             hover ? 0xFF3B4252 : 0xAA2E3440);
         graphics.fill(r[0], r[1], r[0] + r[2], r[1] + 1, COLOR_ACCENT);
-        drawCentered(graphics, plain(font.plainSubstrByWidth(label, r[2] - 8)),
+        drawCentered(graphics, font.plainSubstrByWidth(label, r[2] - 8),
             r[0] + r[2] / 2, r[1] + 6, COLOR_NAME);
     }
 
@@ -347,11 +438,6 @@ public class ChallengeSetupScreen extends Screen {
 
     private void drawCentered(GuiGraphics graphics, String text, int cx, int y, int color) {
         graphics.drawString(font, text, cx - font.width(text) / 2, y, color);
-    }
-
-    /** Strips legacy section signs; I18n.get returns raw text here. */
-    private static String plain(String s) {
-        return s == null ? "" : s;
     }
 
     /** Item name with registry-id fallback when the hover name is empty/untranslated. */

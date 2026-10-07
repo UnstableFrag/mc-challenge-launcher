@@ -39,7 +39,9 @@ jobs:
       #   challenge-hud-<mc>-forge.jar    — только 1.16.5, 1.17.1, 1.18.2, 1.19.2, 1.19.3, 1.19.4, 1.20.1, 1.20.2, 1.20.4 (9)
       #   challenge-hud-<mc>-neoforge.jar — только 1.20.2, 1.20.4, 1.20.6, 1.21, 1.21.1–1.21.11 (15)
       # Проверяем не только наличие файла, но и что в нём есть классы мода
-      # (защита от пустых/битых jar — такая проблема в этом репо уже была).
+      # (защита от пустых/битых jar — такая проблема в этом репо уже была),
+      # и что ChallengeSetupScreen действительно объявляет tick() и вызывает
+      # finishRolling() (защита от фикса, внесённого в 1 копию из 8 эпох).
       - name: Verify jars contain the mod classes
         shell: bash
         run: |
@@ -60,18 +62,105 @@ jobs:
             find challenge-mod -type f -path "*/build/libs/$name" -print -quit
           }
 
-          check_jar() {
-            local jar="$1"; shift
-            [ -f "$jar" ] || { echo "::error::Expected jar missing: $jar"; exit 1; }
-            local cls
-            for cls in "$@"; do
-              if unzip -l "$jar" | grep -q "$cls"; then
-                echo "OK: $(basename "$jar") contains $cls"
-              else
-                echo "::error::$(basename "$jar") does not contain $cls (empty/broken jar?)"
+          # javap приходит с JDK из actions/setup-java (Temurin 21). Если он когда-нибудь
+          # пропадёт с PATH — предупреждаем явно и пропускаем именно эту проверку, а не
+          # роняем всю матрицу по неверной причине.
+          JAVAP_OK=0
+          if command -v javap >/dev/null 2>&1; then
+            JAVAP_OK=1
+            echo "javap: $(command -v javap)"
+          else
+            echo "::warning::javap not found on PATH — bytecode-проверки ChallengeSetupScreen.tick()/finishRolling() будут пропущены (проверки наличия классов и ресурсов ниже всё равно выполняются)"
+          fi
+
+          # Структурный контракт jar-а, одинаковый для всех лоадеров: common-классы
+          # (в т.ч. по одной копии на эпоху) + lang-ресурсы. Это литеральные подстроки
+          # (сопоставление идёт через case, а не через grep BRE — экранировать точки не нужно).
+          CORE_CLASSES=(
+            "challengehud/ChallengeHud.class"
+            "challengehud/ChallengeSetupScreen.class"
+            "challengehud/Confetti.class"
+            "challengehud/EraBridge.class"
+            "assets/challengehud/lang/en_us.json"
+            "assets/challengehud/lang/ru_ru.json"
+          )
+
+          # Поведенческий контракт. ChallengeSetupScreen лежит в 8 почти идентичных копиях
+          # (по одной на эпоху, challenge-mod/common/src/<era>/java/...). Фикс экрана,
+          # внесённый руками в 1 копию из 8, компилируется БЕЗ ошибок — `gradle build`
+          # такое не ловит. Именно так уехало в релиз: finishRolling() вызывался ровно из
+          # одной эпохи, поэтому кнопка Roll залипала на 7 версиях из 8.
+          # Проверяем байткод каждого jar-а:
+          #   1) tick() объявлен — имя метода зависит от маппингов лоадера (см. case ниже,
+          #      значения сверены javap по собранным jar-ам всех трёх лоадеров);
+          #   2) finishRolling() реально ВЫЗЫВАЕТСЯ. Это private-метод самого мода, поэтому
+          #      remap не переименовывает его ни на одном лоадере — проверка не зависит от
+          #      маппингов и дополнительно ловит вариант «tick() есть, но finishRolling()
+          #      из него не вызывается», который проверка (1) бы пропустила.
+          check_tick() {
+            local jar="$1" loader="$2"
+            if [ "$JAVAP_OK" != "1" ]; then
+              echo "WARN: $(basename "$jar") — javap недоступен, проверка байткода tick()/finishRolling() пропущена"
+              return 0
+            fi
+            local class="com.github.mcchallenge.challengehud.ChallengeSetupScreen"
+            local decl body has_tick
+            decl=$(javap -p  -classpath "$jar" "$class") || { echo "::error::javap не смог прочитать $class из $(basename "$jar")"; exit 1; }
+            body=$(javap -c -p -classpath "$jar" "$class") || { echo "::error::javap -c упал на $(basename "$jar")"; exit 1; }
+            has_tick=0
+            case "$loader" in
+              # Fabric публикует jar в intermediary: Screen.tick() -> method_25426()
+              fabric)
+                case "$decl" in *"void method_25426()"*) has_tick=1 ;; esac
+                ;;
+              # Forge 1.16.5 — SRG (func_231160_c_); Forge 1.17+ уже mojmap (tick)
+              forge)
+                case "$decl" in *"void tick()"*|*"void func_231160_c_()"*) has_tick=1 ;; esac
+                ;;
+              # NeoForge — mojmap, официальное имя tick()
+              *)
+                case "$decl" in *"void tick()"*) has_tick=1 ;; esac
+                ;;
+            esac
+            if [ "$has_tick" = "1" ]; then
+              echo "OK: $(basename "$jar") объявляет tick() override"
+            else
+              echo "::error::$(basename "$jar"): ChallengeSetupScreen is missing tick(); a screen-logic fix was probably applied to only some of the 8 era copies (challenge-mod/common/src/<era>/java/...) — gradle build это не ловит, все 8 копий компилируются"
+              exit 1
+            fi
+            case "$body" in
+              *"Method finishRolling"*)
+                echo "OK: $(basename "$jar") вызывает finishRolling() из tick()"
+                ;;
+              *)
+                echo "::error::$(basename "$jar"): ChallengeSetupScreen объявляет finishRolling(), но нигде его не вызывает — кнопка Roll залипнет навсегда (фикс tick() применён не ко всем 8 копиям эпох)"
                 exit 1
-              fi
+                ;;
+            esac
+          }
+
+          check_jar() {
+            local jar="$1" loader="$2"; shift 2
+            [ -f "$jar" ] || { echo "::error::Expected jar missing: $jar"; exit 1; }
+            # Листинг jar-а читаем ОДИН раз и матчим через case, а не через
+            # `unzip -l | grep -q` в цикле: grep -q закрывает пайп после первого
+            # совпадения, unzip ловит SIGPIPE (141), и под `set -o pipefail` весь пайп
+            # возвращает 141 → ложное "jar пустой/битый" примерно в 1 прогоне из 300
+            # (воспроизведено локально). Плюс unzip вызывается 1 раз вместо 7.
+            local listing cls
+            listing=$(unzip -l "$jar") || { echo "::error::unzip -l failed for $(basename "$jar") (corrupt jar?)"; exit 1; }
+            for cls in "$@"; do
+              case "$listing" in
+                *"$cls"*)
+                  echo "OK: $(basename "$jar") contains $cls"
+                  ;;
+                *)
+                  echo "::error::$(basename "$jar") does not contain $cls (empty/broken jar?)"
+                  exit 1
+                  ;;
+              esac
             done
+            check_tick "$jar" "$loader"
           }
 
           echo "== Produced jars =="
@@ -80,12 +169,12 @@ jobs:
 
           # Fabric — всегда (common класс + fabric entrypoint)
           FABRIC=$(find_jar "challenge-hud-${MC}.jar")
-          check_jar "$FABRIC" "challengehud/ChallengeHud\.class" "ChallengeHudFabric\.class"
+          check_jar "$FABRIC" fabric "${CORE_CLASSES[@]}" "ChallengeHudFabric.class"
 
           # Forge — только 1.16.5–1.20.4 (в старых jar внутри также EraBridge + WinScreen/TimeoutScreen)
           FORGE=$(find_jar "challenge-hud-${MC}-forge.jar")
           if [ "$FORGE_EXPECTED" = "1" ]; then
-            check_jar "$FORGE" "challengehud/ChallengeHud\.class" "ChallengeHudForge\.class"
+            check_jar "$FORGE" forge "${CORE_CLASSES[@]}" "ChallengeHudForge.class"
           elif [ -n "$FORGE" ]; then
             echo "WARN: unexpected forge jar produced for $MC: $FORGE"
           fi
@@ -93,7 +182,7 @@ jobs:
           # NeoForge — только 1.20.2–1.21.11
           NEOFORGE=$(find_jar "challenge-hud-${MC}-neoforge.jar")
           if [ "$NEOFORGE_EXPECTED" = "1" ]; then
-            check_jar "$NEOFORGE" "challengehud/ChallengeHud\.class" "ChallengeHudNeoForge\.class"
+            check_jar "$NEOFORGE" neoforge "${CORE_CLASSES[@]}" "ChallengeHudNeoForge.class"
           elif [ -n "$NEOFORGE" ]; then
             echo "WARN: unexpected neoforge jar produced for $MC: $NEOFORGE"
           fi

@@ -132,6 +132,15 @@ public class ChallengeSetupScreen extends Screen {
     // ---- input -----------------------------------------------------------------
 
     @Override
+    public void tick() {
+        // Completes the roll animation once the deadline passes, so the Roll
+        // button stops latching on "Rolling..." and can be clicked again.
+        if (rolling && System.currentTimeMillis() >= rollingUntilMs) {
+            finishRolling();
+        }
+    }
+
+    @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (confirmAction != ConfirmAction.NONE) {
             if (inRect(mouseX, mouseY, lockRect())) {

@@ -16,6 +16,11 @@ import net.minecraft.world.item.ItemStack;
  * <p>The challenge mode is a read-only field: the launcher writes
  * {@code config/challenge/mode.json} at roll time and the mod only reads it, so the menu
  * states the mode instead of offering it as a choice (see {@link #drawModeBlock}).
+ *
+ * <p>All era-independent logic (step, roll animation, confirm dialog, click routing) lives in
+ * {@link ChallengeSetupModel}, in {@code src/main} — one copy compiled once for every era,
+ * because a fix applied to only some of the 8 per-era copies shipped broken in v0.5.0. This
+ * class is the thin view: it renders and forwards input.
  */
 public class ChallengeSetupScreen extends Screen {
     private static final int COLOR_TEXT = 0xFFA6ADC8;
@@ -27,16 +32,12 @@ public class ChallengeSetupScreen extends Screen {
     /** Hairline divider inside the panel — decorative, so it stays below the text contrast. */
     private static final int COLOR_RULE = 0xFF3B4252;
 
-    private static final long ROLL_DELAY_MS = 800;
+    /** Era-independent logic; this class only draws it and forwards clicks to it. */
+    private final ChallengeSetupModel model = new ChallengeSetupModel();
 
-    /** 1 = no target yet (roll first), 2 = target rolled (seal / re-roll). */
-    private int step = 1;
-
-    private ConfirmAction confirmAction = ConfirmAction.NONE;
-    private boolean rolling = false;
-    private long rollingUntilMs = 0;
-
-    enum ConfirmAction { NONE, SEAL, RESEAL }
+    // Read-only aliases so the render code below reads exactly as before the extraction.
+    private int step() { return model.step(); }
+    private boolean rolling() { return model.rolling(); }
 
     public ChallengeSetupScreen() {
         super(EraBridge.text("MC Challenge"));
@@ -46,20 +47,40 @@ public class ChallengeSetupScreen extends Screen {
     protected void init() {
         // D: never roll on open. Jump straight to step 2 when a seal is already
         // committed (opened from the "Sealed" title button).
-        step = ChallengeHud.state == ChallengeHud.State.SEALED ? 2 : 1;
-        rolling = false;
-        confirmAction = ConfirmAction.NONE;
+        model.init(ChallengeHud.state == ChallengeHud.State.SEALED,
+            ChallengeHud.mode == ChallengeHud.ChallengeMode.FULL);
         ChallengeHud.loadRecords();
+    }
+
+    /**
+     * Pushes the two launcher-owned inputs the model needs into it. Both live in
+     * {@code ChallengeHud} and both can change while this screen is open, so they are read
+     * before every model call instead of being cached at {@link #init()}.
+     */
+    private void syncModel() {
+        model.syncContext(ChallengeHud.state == ChallengeHud.State.SEALED,
+            ChallengeHud.mode == ChallengeHud.ChallengeMode.FULL);
+    }
+
+    /** Performs the effect the model decided on. The model never touches ChallengeHud itself. */
+    private void apply(ChallengeSetupModel.Action action) {
+        switch (action) {
+            case ROLL: ChallengeHud.rollTarget(); break;
+            case REROLL_SEALED: ChallengeHud.rerollSealedFromMenu(); break;
+            case SEAL: ChallengeHud.sealFromMenu(); break;
+            case CLOSE_SCREEN: onClose(); break;
+            default: break;
+        }
     }
 
     // ---- layout helpers -------------------------------------------------------
 
     private int panelW() {
-        return Math.min(step == 1 ? 280 : 320, width - 24);
+        return Math.min(step() == 1 ? 280 : 320, width - 24);
     }
 
     private int panelH() {
-        return Math.min(step == 1 ? 176 : 236, height - 24);
+        return Math.min(step() == 1 ? 176 : 236, height - 24);
     }
 
     private int panelX() {
@@ -90,89 +111,36 @@ public class ChallengeSetupScreen extends Screen {
         return new int[] { width / 2 + 10, height / 2 + 26, 100, 20 };
     }
 
-    // ---- actions ---------------------------------------------------------------
-
-    private void clickRoll() {
-        if (rolling) return;
-        if (ChallengeHud.state == ChallengeHud.State.SEALED) {
-            if (ChallengeHud.mode == ChallengeHud.ChallengeMode.FULL) {
-                // B3: confirm first (dialog without item name); CASUAL re-rolls freely.
-                confirmAction = ConfirmAction.RESEAL;
-            } else {
-                startRolling();
-            }
-            return;
-        }
-        startRolling();
-    }
-
-    private void clickSeal() {
-        if (rolling) return;
-        if (ChallengeHud.state == ChallengeHud.State.SEALED) {
-            return; // button shows "Sealed — enter a world"; no-op
-        }
-        if (ChallengeHud.mode == ChallengeHud.ChallengeMode.FULL) {
-            confirmAction = ConfirmAction.SEAL;
-            return;
-        }
-        // CASUAL: seal directly, no confirmation dialog.
-        ChallengeHud.sealFromMenu();
-    }
-
-    private void startRolling() {
-        rolling = true;
-        rollingUntilMs = System.currentTimeMillis() + ROLL_DELAY_MS;
-    }
-
-    private void finishRolling() {
-        rolling = false;
-        if (ChallengeHud.state == ChallengeHud.State.SEALED) {
-            ChallengeHud.rerollSealedFromMenu();
-        } else {
-            ChallengeHud.rollTarget();
-        }
-        step = 2;
-    }
-
-    private void doConfirm() {
-        if (confirmAction == ConfirmAction.SEAL) {
-            ChallengeHud.sealFromMenu();
-        } else if (confirmAction == ConfirmAction.RESEAL) {
-            ChallengeHud.rerollSealedFromMenu();
-        }
-        confirmAction = ConfirmAction.NONE;
-    }
-
     // ---- input -----------------------------------------------------------------
 
     @Override
     public void tick() {
+        syncModel();
         // Completes the roll animation once the deadline passes, so the Roll
         // button stops latching on "Rolling..." and can be clicked again.
-        if (rolling && System.currentTimeMillis() >= rollingUntilMs) {
+        if (model.tick(System.currentTimeMillis())) {
             finishRolling();
         }
     }
 
+    /**
+     * The single completion path for the roll animation.
+     *
+     * <p>Kept as a named method (and called only from {@link #tick()}) on purpose: CI asserts
+     * that every shipped jar's {@code ChallengeSetupScreen} bytecode contains a call to
+     * {@code finishRolling()}, because the missing call in 7 of 8 era copies is what shipped
+     * the permanently-latched Roll button in v0.5.0. The logic itself now lives once, in
+     * {@link ChallengeSetupModel}.
+     */
+    private void finishRolling() {
+        apply(model.finishRolling());
+    }
+
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (confirmAction != ConfirmAction.NONE) {
-            if (inRect(mouseX, mouseY, lockRect())) {
-                doConfirm();
-            } else if (inRect(mouseX, mouseY, cancelRect())) {
-                confirmAction = ConfirmAction.NONE;
-            }
-            return true;
-        }
-        if (rolling) return true;
-        if (step == 1) {
-            if (inRect(mouseX, mouseY, rollRect())) clickRoll();
-            else if (inRect(mouseX, mouseY, backRect())) onClose();
-        } else {
-            if (inRect(mouseX, mouseY, sealRect())) clickSeal();
-            else if (inRect(mouseX, mouseY, rollRect())) clickRoll();
-            else if (inRect(mouseX, mouseY, backRect())) onClose();
-        }
+        syncModel();
+        apply(model.onClick(mouseX, mouseY, System.currentTimeMillis(),
+            sealRect(), rollRect(), backRect(), lockRect(), cancelRect()));
         return true;
     }
 
@@ -180,11 +148,8 @@ public class ChallengeSetupScreen extends Screen {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         // B2: ESC closes the confirm dialog first, then the screen.
         if (keyCode == 256) {
-            if (confirmAction != ConfirmAction.NONE) {
-                confirmAction = ConfirmAction.NONE;
-            } else {
-                onClose();
-            }
+            syncModel();
+            apply(model.onEscape());
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
@@ -219,10 +184,10 @@ public class ChallengeSetupScreen extends Screen {
 
         // Read-only mode field (launcher-owned): step 1 states both modes so the choice is
         // visible, step 2 states only the active one.
-        drawModeBlock(graphics, panelX, panelW, panelY, step == 1);
+        drawModeBlock(graphics, panelX, panelW, panelY, step() == 1);
 
         ItemStack stack = ChallengeHud.targetStack;
-        if (step == 2) {
+        if (step() == 2) {
             int frameX = cx - 24;
             int frameY = panelY + 92;
             graphics.fill(frameX, frameY, frameX + 48, frameY + 48, 0x66000000);
@@ -248,15 +213,15 @@ public class ChallengeSetupScreen extends Screen {
         }
 
         drawButton(graphics, rollRect(), mouseX, mouseY,
-            translate(rolling ? "challengehud.menu.rolling" : "challengehud.menu.roll"));
-        if (step == 2) {
+            translate(rolling() ? "challengehud.menu.rolling" : "challengehud.menu.roll"));
+        if (step() == 2) {
             boolean sealed = ChallengeHud.state == ChallengeHud.State.SEALED;
             drawButton(graphics, sealRect(), mouseX, mouseY,
                 translate(sealed ? "challengehud.menu.sealed" : "challengehud.menu.seal"));
         }
         drawButton(graphics, backRect(), mouseX, mouseY, translate("challengehud.menu.back"));
 
-        if (confirmAction != ConfirmAction.NONE) {
+        if (model.dialogOpen()) {
             renderConfirmDialog(graphics, cx, height / 2, mouseX, mouseY);
         }
     }
@@ -343,7 +308,7 @@ public class ChallengeSetupScreen extends Screen {
         drawCentered(graphics, translate("challengehud.menu.confirm.title"), cx, dlgY + 14, COLOR_NAME);
 
         // B3: the RESEAL dialog carries no item name (nothing is committed yet).
-        String body = confirmAction == ConfirmAction.RESEAL
+        String body = model.isResealDialog()
             ? translate("challengehud.menu.confirm.reseal.body")
             : translate("challengehud.menu.confirm.body", itemDisplayName(ChallengeHud.targetStack));
         body = font.plainSubstrByWidth(body, dlgW - 24);

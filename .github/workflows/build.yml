@@ -90,50 +90,45 @@ jobs:
           # внесённый руками в 1 копию из 8, компилируется БЕЗ ошибок — `gradle build`
           # такое не ловит. Именно так уехало в релиз: finishRolling() вызывался ровно из
           # одной эпохи, поэтому кнопка Roll залипала на 7 версиях из 8.
-          # Проверяем байткод каждого jar-а:
-          #   1) tick() объявлен — имя метода зависит от маппингов лоадера (см. case ниже,
-          #      значения сверены javap по собранным jar-ам всех трёх лоадеров);
-          #   2) finishRolling() реально ВЫЗЫВАЕТСЯ. Это private-метод самого мода, поэтому
-          #      remap не переименовывает его ни на одном лоадере — проверка не зависит от
-          #      маппингов и дополнительно ловит вариант «tick() есть, но finishRolling()
-          #      из него не вызывается», который проверка (1) бы пропустила.
+          #
+          # Проверяем байткод каждого jar-а по ДВУМ сигнатурам, и обе — вызовы методов
+          # САМОГО МОДА, которые remap не переименовывает ни на одном лоадере:
+          #   1) ChallengeSetupScreen вызывает finishRolling()      — ловит исходный баг;
+          #   2) ChallengeSetupScreen вызывает ChallengeSetupModel.tick() — ловит «tick()
+          #      есть, но состояние прокрутки не тикает».
+          #
+          # ИМЕННО ПОЭТОМУ здесь не проверяется объявление tick() по имени. Имя нестабильно
+          # принципиально, и это ломало релизный билд, а не ловило баг:
+          #     Fabric    → intermediary  method_25426
+          #     Forge 1.17+ → SRG (новый) m_86600_
+          #     Forge 1.16.5 → SRG (старый) func_231160_c_
+          #     NeoForge  → mojmap       tick
+          # Сверено javap по реально собранным jar-ам всех трёх лоадеров. Любая проверка по
+          # имени Screen-метода будет молча ломаться на следующем лоадере — не добавляйте её.
           check_tick() {
-            local jar="$1" loader="$2"
+            local jar="$1"
             if [ "$JAVAP_OK" != "1" ]; then
-              echo "WARN: $(basename "$jar") — javap недоступен, проверка байткода tick()/finishRolling() пропущена"
+              echo "WARN: $(basename "$jar") — javap недоступен, проверка байткода finishRolling()/ChallengeSetupModel.tick() пропущена"
               return 0
             fi
             local class="com.github.mcchallenge.challengehud.ChallengeSetupScreen"
-            local decl body has_tick
-            decl=$(javap -p  -classpath "$jar" "$class") || { echo "::error::javap не смог прочитать $class из $(basename "$jar")"; exit 1; }
+            local body
             body=$(javap -c -p -classpath "$jar" "$class") || { echo "::error::javap -c упал на $(basename "$jar")"; exit 1; }
-            has_tick=0
-            case "$loader" in
-              # Fabric публикует jar в intermediary: Screen.tick() -> method_25426()
-              fabric)
-                case "$decl" in *"void method_25426()"*) has_tick=1 ;; esac
-                ;;
-              # Forge 1.16.5 — SRG (func_231160_c_); Forge 1.17+ уже mojmap (tick)
-              forge)
-                case "$decl" in *"void tick()"*|*"void func_231160_c_()"*) has_tick=1 ;; esac
-                ;;
-              # NeoForge — mojmap, официальное имя tick()
-              *)
-                case "$decl" in *"void tick()"*) has_tick=1 ;; esac
-                ;;
-            esac
-            if [ "$has_tick" = "1" ]; then
-              echo "OK: $(basename "$jar") объявляет tick() override"
-            else
-              echo "::error::$(basename "$jar"): ChallengeSetupScreen is missing tick(); a screen-logic fix was probably applied to only some of the 8 era copies (challenge-mod/common/src/<era>/java/...) — gradle build это не ловит, все 8 копий компилируются"
-              exit 1
-            fi
             case "$body" in
               *"Method finishRolling"*)
-                echo "OK: $(basename "$jar") вызывает finishRolling() из tick()"
+                echo "OK: $(basename "$jar") вызывает finishRolling()"
                 ;;
               *)
-                echo "::error::$(basename "$jar"): ChallengeSetupScreen объявляет finishRolling(), но нигде его не вызывает — кнопка Roll залипнет навсегда (фикс tick() применён не ко всем 8 копиям эпох)"
+                echo "::error::$(basename "$jar"): ChallengeSetupScreen не вызывает finishRolling() — кнопка Roll залипнет навсегда (фикс применён не ко всем 8 копиям эпох)"
+                exit 1
+                ;;
+            esac
+            case "$body" in
+              *"ChallengeSetupModel.tick"*)
+                echo "OK: $(basename "$jar") тикает модель из tick()"
+                ;;
+              *)
+                echo "::error::$(basename "$jar"): ChallengeSetupScreen не вызывает ChallengeSetupModel.tick() — прокрутка цели не завершится (фикс применён не ко всем 8 копиям эпох)"
                 exit 1
                 ;;
             esac
